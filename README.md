@@ -1,4 +1,4 @@
-# kenyaccounting
+# KenyAccounting
 
 ## Disclaimer:
 
