@@ -51,3 +51,18 @@ Other structure:
 Code will maintain a local SQLite database, in a local git repo.  Advise people to backup the repo somehow according to their institution's needs.  All inputs and outputs may also be kept in the repo.
 
 Suggestions?
+
+## Claude Code - Project Task Planning
+
+### TODOS.md Creation
+no, the TODOS.md should be high level items. just four items:
+task create a /logprompt slash command so that Claude appends the current prompt to the PromptList.md file in the current directory (usually a git repo root). the format of the promptlist should be defined within the slash command code, based on the current PromptList.md format.
+task add a copy of the code for this slash command to the kenyaccounting repo also, if that isn't the standard place for it.
+task add paystub generation to the kenyaccounting software core scope if not there yet
+task make a spec for unit tests testing the software's stated goals.
+
+### Prompt Logging Request
+add the previous prompt to the PromptHistory.md according to that format. and this one.
+
+### Start Tasks
+create a new git feature branch for this list of tasks, then start the tasks. add this prompt to PromptList.md also

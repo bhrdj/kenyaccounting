@@ -20,7 +20,7 @@ KenyAccounting/
 │   ├── compliance_2026.py      # HARD-CODED LAW: Tax bands, NSSF limits
 │   ├── models.py               # Data classes (Employee, Contract)
 │   ├── engine.py               # Gross-to-Net Logic
-│   └── outputs.py              # Equity Bank CSV & PDF generators
+│   └── outputs.py              # Equity Bank CSV, PDF paystubs & reports
 │
 ├── app.py                      # Streamlit User Interface
 ├── requirements.txt            # Dependencies
@@ -288,6 +288,7 @@ if st.button("Run Payroll Calculation"):
         
         st.header("3. Downloads")
         st.download_button("Download Equity Bank CSV", data="...", file_name="equity_upload.csv")
+        st.download_button("Download Paystubs (PDF)", data="...", file_name="paystubs.pdf")
     else:
         st.error("Please upload a timesheet first.")
 
@@ -313,3 +314,35 @@ openpyxl
 4. **Run:** Execute `streamlit run app.py`.
 
 Would you like me to create the **Template TSV Files** (header rows) next, so you can copy-paste them directly into your project?
+
+---
+
+### **7. Paystub Generation (`outputs.py`)**
+
+Individual PDF paystubs for each employee containing:
+
+- **Header:** Company name, payroll period, pay date
+- **Employee Info:** Name, ID/PIN, department (if applicable)
+- **Daily Work Log:**
+  - Date and hours worked for each day in the month
+- **Time Off & Holidays:**
+  - Public holidays falling in period (with dates)
+  - Sick days (full pay)
+  - Half-pay sick days
+  - Annual leave days used
+  - Annual leave days accrued this period
+  - Annual leave balance (saved/carried forward)
+- **Earnings Breakdown:**
+  - Base salary / hourly rate
+  - Normal hours worked
+  - Overtime (only if worked and thus to be paid out)
+  - Gross pay
+- **Deductions Breakdown:**
+  - NSSF (Tier 1 + Tier 2)
+  - SHIF
+  - AHL (Affordable Housing Levy)
+  - PAYE
+  - Any other deductions
+- **Net Pay:** Final amount to be paid
+- **YTD Totals:** Year-to-date earnings and deductions (optional, phase 2)
+- **Footer:** "This is not an official KRA document" disclaimer
