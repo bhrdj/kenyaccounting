@@ -66,3 +66,9 @@ add the previous prompt to the PromptHistory.md according to that format. and th
 
 ### Start Tasks
 create a new git feature branch for this list of tasks, then start the tasks. add this prompt to PromptList.md also
+
+### Unit Test Spec Update
+now update the unit test spec with pseudocode /logprompt
+
+### Leave Stocks Clarification
+note that the input spreadsheet will say if the employee was sick or not, how many days and hours they workds. and the history database will support stocks of different kinds of leave. and they the model determines if they used sick days, what kind of sick days, annual leave days, and/or unpaid leave. that decision isn't specified case by case, it's determined by the stocks and flows. so you need stocks data in the final tests.
