@@ -72,3 +72,16 @@ now update the unit test spec with pseudocode /logprompt
 
 ### Leave Stocks Clarification
 note that the input spreadsheet will say if the employee was sick or not, how many days and hours they workds. and the history database will support stocks of different kinds of leave. and they the model determines if they used sick days, what kind of sick days, annual leave days, and/or unpaid leave. that decision isn't specified case by case, it's determined by the stocks and flows. so you need stocks data in the final tests.
+
+## Claude Code - Spec Management
+
+### Spec Update Approach
+oh yeah, i need to use the unit test spec to review and comprehensively update the initial spec to a new spec with the new date. should i rename the initial spec to the new date and commit, and then edit it, so it maintains continuity?
+
+## Claude Code - Project Configuration
+
+### Claude Attribution Removal
+put a note in CLAUDE.md to stop crediting Claude.
+
+### Prompt Logging
+add to promptlog my prompt about renaming the initial spec, and also the one about not crediting claude and that prompt there also
