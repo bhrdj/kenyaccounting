@@ -61,9 +61,19 @@ SHIF and AHL are **allowable deductions** (reduce taxable income before PAYE), n
 
 ## Specifications Reference
 
+- `specs/technical_spec.md` - Object-oriented design and calculation flow
+- `specs/unit_test_spec.md` - Test scenarios with 10 employees
 - `specs/initial_spec-2025_12_31.md` - Initial system design and code structure
 - `backgrounders/backgrounder-Employment_Law_Update_2026-AI_Generated.md` - Comprehensive Kenya tax/labor law reference for 2026
 - `specs/PromptHistory.md` - Development prompt history
+
+## Test Fixtures
+
+Located in `tests/fixtures/`:
+- `test_employees.tsv` - 10 test employees
+- `test_contracts.tsv` - Contract parameters for each
+- `test_leave_stocks.tsv` - Leave balances as of Feb 2026
+- `test_timesheets/2026_02.tsv` - Daily timesheet entries for February 2026
 
 ## Output Formats
 
@@ -86,3 +96,4 @@ All statutory remittances due by 9th of following month.
 - This software provides no tax advice - all calculations must be verified by a qualified accountant
 - Licensed under Apache 2.0
 - Do not include Claude attribution or "Co-Authored-By" lines in commit messages
+- Ask before running `git reset` commands
