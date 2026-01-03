@@ -72,3 +72,30 @@ now update the unit test spec with pseudocode /logprompt
 
 ### Leave Stocks Clarification
 note that the input spreadsheet will say if the employee was sick or not, how many days and hours they workds. and the history database will support stocks of different kinds of leave. and they the model determines if they used sick days, what kind of sick days, annual leave days, and/or unpaid leave. that decision isn't specified case by case, it's determined by the stocks and flows. so you need stocks data in the final tests.
+
+## Claude Code - CLAUDE.md and Technical Spec Session
+
+### CLAUDE.md Creation
+/init (create CLAUDE.md for the repo)
+
+### Commit Message Attribution
+include in CLAUDE.md to not attribute claude in commit messages
+
+### Statutory Output Formats
+also, another output is the documentation for KRA and NSSF and SHA payments. is there an upload format for those?
+
+### Test Fixtures and Technical Spec
+we don't need the expected values yet, we can check it externally after we get the test results. let's start with the test fixtures. then a technical spec without code, but including a concept for a healthy and elegant object-oriented structure. use minimal helper functions etc. make a note that in this prototyping phase we want to avoid spamming up the readability of the code with bells and whistles, even if they're good code practice. we can add lots of try-except blocks and robustness later.
+
+### Git Branch Management
+can we make this commit you just did on a new branch for feature: technical spec
+undo the commit. commit the test fixtures to main. then let's do a new feature branch for the technical spec
+
+### SQLite Question
+what's good practice. we were planning on using sqlite right? go ahead and put all the prompts from this convo into the prompthistory btw.
+
+### Dev Strategy Document
+make a dev_strategy.md document including this response content. we can bring info from the prompthistory over there and add more as we proceed also.
+
+### TSV ↔ Object Flow
+what about the OO and the tsv, which goes in which at which stages. did you come to a best practice conclusion on that?

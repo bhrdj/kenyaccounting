@@ -61,6 +61,7 @@ SHIF and AHL are **allowable deductions** (reduce taxable income before PAYE), n
 
 ## Specifications Reference
 
+- `specs/dev_strategy.md` - Strategic decisions (data storage, testing, phasing)
 - `specs/technical_spec.md` - Object-oriented design and calculation flow
 - `specs/unit_test_spec.md` - Test scenarios with 10 employees
 - `specs/initial_spec-2025_12_31.md` - Initial system design and code structure
