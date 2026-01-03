@@ -62,7 +62,7 @@ SHIF and AHL are **allowable deductions** (reduce taxable income before PAYE), n
 ## Specifications Reference
 
 - `specs/initial_spec-2025_12_31.md` - Initial system design and code structure
-- `specs/backgrounder-Employment_Law_Update_2026-AI_Generated.md` - Comprehensive Kenya tax/labor law reference for 2026
+- `backgrounders/backgrounder-Employment_Law_Update_2026-AI_Generated.md` - Comprehensive Kenya tax/labor law reference for 2026
 - `specs/PromptHistory.md` - Development prompt history
 
 ## Output Formats
