@@ -1,0 +1,11 @@
+employee_id	contract_type	base_salary	weekly_hours	housing_type	housing_market_value	nssf_tier	start_date	end_date	status
+1	hourly	16113.75	52	none		standard	2025-01-01		active
+2	hourly	25000	45	none		standard	2025-01-01		active
+3	prorated_min_wage	16113.75	45	none		standard	2025-01-01		active
+4	fixed_monthly	50000		none		standard	2025-01-01		active
+5	fixed_monthly	550000		none		standard	2025-01-01		active
+6	hourly	20000	52	none		standard	2025-01-01		active
+7	fixed_monthly	35000		none		standard	2025-01-01		active
+8	fixed_monthly	30000		none		standard	2025-01-01		active
+9	fixed_monthly	40000		none		standard	2025-01-01		active
+10	fixed_monthly	60000		quarters	8000	standard	2025-01-01		active
