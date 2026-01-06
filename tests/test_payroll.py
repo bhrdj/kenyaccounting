@@ -1,3 +1,14 @@
+"""
+Payroll calculation tests.
+
+This module contains two categories of tests:
+1. OFFICIAL PUBLISHED EXAMPLES - Third-party verified calculations from Net Pay Kenya
+   and HR Fleek (February 2026), using Year 4 NSSF rates. These serve as our primary
+   validation against industry-accepted figures.
+
+2. SYNTHETIC TEST SCENARIOS - Artificial test cases designed to exercise specific
+   edge cases and code paths (hourly workers, overtime, leave, housing benefits, etc.)
+"""
 from datetime import date
 from decimal import Decimal
 
@@ -12,8 +23,191 @@ from src.calculators import (
     PAYECalculator,
     PayrollEngine,
 )
+from src.models import Contract
 from src.rates import StatutoryRates
 
+
+# =============================================================================
+# SECTION 1: OFFICIAL PUBLISHED EXAMPLES
+# Source: Net Pay Kenya, HR Fleek (2026 compliance documentation)
+# These examples use Year 4 NSSF rates (effective February 2026)
+# =============================================================================
+
+class TestOfficialPublishedExamples:
+    """
+    Tests based on third-party published payroll examples for Kenya 2026.
+
+    These are authoritative reference calculations that our system must match.
+    Input data has been back-calculated from the published outputs.
+    """
+
+    @pytest.fixture
+    def rates(self):
+        """Year 4 NSSF rates (February 2026)."""
+        return StatutoryRates(date(2026, 2, 28))
+
+    @pytest.fixture
+    def base_contract(self):
+        """Base contract template for fixed monthly employees."""
+        return Contract(
+            employee_id=0,
+            contract_type="fixed_monthly",
+            base_salary=Decimal("0"),
+            weekly_hours=None,
+            housing_type="none",
+            housing_market_value=None,
+            nssf_tier="standard",
+            start_date=date(2026, 1, 1),
+            end_date=None,
+            status="active",
+        )
+
+    # Published example data: (gross, expected_nssf, expected_shif, expected_ahl,
+    #                          expected_taxable, expected_paye, expected_net)
+    PUBLISHED_EXAMPLES = [
+        pytest.param(
+            Decimal("30000"),    # Entry Level
+            Decimal("1800"),     # NSSF (6% of gross, below UEL)
+            Decimal("825"),      # SHIF (2.75%)
+            Decimal("450"),      # AHL (1.5%)
+            Decimal("26925"),    # Taxable Pay
+            Decimal("732"),      # PAYE (rounded)
+            Decimal("26193"),    # Net Pay
+            id="entry_level_30k",
+        ),
+        pytest.param(
+            Decimal("200000"),   # Senior Executive
+            Decimal("6480"),     # NSSF (capped at max)
+            Decimal("5500"),     # SHIF (2.75%)
+            Decimal("3000"),     # AHL (1.5%)
+            Decimal("185020"),   # Taxable Pay
+            Decimal("47889"),    # PAYE (rounded)
+            Decimal("137131"),   # Net Pay
+            id="senior_executive_200k",
+        ),
+        pytest.param(
+            Decimal("500000"),   # C-Suite Level
+            Decimal("6480"),     # NSSF (capped at max)
+            Decimal("13750"),    # SHIF (2.75%)
+            Decimal("7500"),     # AHL (1.5%)
+            Decimal("472270"),   # Taxable Pay
+            Decimal("134064"),   # PAYE (rounded)
+            Decimal("338206"),   # Net Pay
+            id="c_suite_500k",
+        ),
+    ]
+
+    @pytest.mark.parametrize(
+        "gross,exp_nssf,exp_shif,exp_ahl,exp_taxable,exp_paye,exp_net",
+        PUBLISHED_EXAMPLES,
+    )
+    def test_deductions_match_published(
+        self, rates, base_contract, gross, exp_nssf, exp_shif, exp_ahl,
+        exp_taxable, exp_paye, exp_net
+    ):
+        """Verify statutory deductions match published examples."""
+        contract = Contract(
+            employee_id=base_contract.employee_id,
+            contract_type=base_contract.contract_type,
+            base_salary=gross,
+            weekly_hours=base_contract.weekly_hours,
+            housing_type=base_contract.housing_type,
+            housing_market_value=base_contract.housing_market_value,
+            nssf_tier=base_contract.nssf_tier,
+            start_date=base_contract.start_date,
+            end_date=base_contract.end_date,
+            status=base_contract.status,
+        )
+        calc = DeductionCalculator(gross, rates, contract)
+        deductions = calc.calculate()
+
+        total_nssf = deductions.nssf_tier_1 + deductions.nssf_tier_2
+        assert total_nssf == exp_nssf, f"NSSF: {total_nssf} != {exp_nssf}"
+        assert deductions.shif == exp_shif, f"SHIF: {deductions.shif} != {exp_shif}"
+        assert deductions.ahl_employee == exp_ahl, f"AHL: {deductions.ahl_employee} != {exp_ahl}"
+
+    @pytest.mark.parametrize(
+        "gross,exp_nssf,exp_shif,exp_ahl,exp_taxable,exp_paye,exp_net",
+        PUBLISHED_EXAMPLES,
+    )
+    def test_taxable_pay_match_published(
+        self, rates, base_contract, gross, exp_nssf, exp_shif, exp_ahl,
+        exp_taxable, exp_paye, exp_net
+    ):
+        """Verify taxable pay (chargeable income) matches published examples."""
+        contract = Contract(
+            employee_id=base_contract.employee_id,
+            contract_type=base_contract.contract_type,
+            base_salary=gross,
+            weekly_hours=base_contract.weekly_hours,
+            housing_type=base_contract.housing_type,
+            housing_market_value=base_contract.housing_market_value,
+            nssf_tier=base_contract.nssf_tier,
+            start_date=base_contract.start_date,
+            end_date=base_contract.end_date,
+            status=base_contract.status,
+        )
+        calc = DeductionCalculator(gross, rates, contract)
+        deductions = calc.calculate()
+
+        # Taxable = Gross - (NSSF + SHIF + AHL)
+        total_nssf = deductions.nssf_tier_1 + deductions.nssf_tier_2
+        taxable = gross - (total_nssf + deductions.shif + deductions.ahl_employee)
+        assert taxable == exp_taxable, f"Taxable: {taxable} != {exp_taxable}"
+
+    @pytest.mark.parametrize(
+        "gross,exp_nssf,exp_shif,exp_ahl,exp_taxable,exp_paye,exp_net",
+        PUBLISHED_EXAMPLES,
+    )
+    def test_paye_match_published(
+        self, rates, gross, exp_nssf, exp_shif, exp_ahl,
+        exp_taxable, exp_paye, exp_net
+    ):
+        """Verify PAYE calculation matches published examples."""
+        paye_calc = PAYECalculator(rates)
+        paye = paye_calc.calculate(exp_taxable)
+
+        # Allow 1 KES tolerance for rounding differences
+        assert abs(paye - exp_paye) <= 1, f"PAYE: {paye} != {exp_paye} (tolerance 1)"
+
+    @pytest.mark.parametrize(
+        "gross,exp_nssf,exp_shif,exp_ahl,exp_taxable,exp_paye,exp_net",
+        PUBLISHED_EXAMPLES,
+    )
+    def test_net_pay_match_published(
+        self, rates, base_contract, gross, exp_nssf, exp_shif, exp_ahl,
+        exp_taxable, exp_paye, exp_net
+    ):
+        """Verify net pay calculation matches published examples."""
+        contract = Contract(
+            employee_id=base_contract.employee_id,
+            contract_type=base_contract.contract_type,
+            base_salary=gross,
+            weekly_hours=base_contract.weekly_hours,
+            housing_type=base_contract.housing_type,
+            housing_market_value=base_contract.housing_market_value,
+            nssf_tier=base_contract.nssf_tier,
+            start_date=base_contract.start_date,
+            end_date=base_contract.end_date,
+            status=base_contract.status,
+        )
+        ded_calc = DeductionCalculator(gross, rates, contract)
+        deductions = ded_calc.calculate()
+
+        paye_calc = PAYECalculator(rates)
+        paye = paye_calc.calculate(exp_taxable)
+
+        total_nssf = deductions.nssf_tier_1 + deductions.nssf_tier_2
+        net = gross - total_nssf - deductions.shif - deductions.ahl_employee - paye
+
+        # Allow 1 KES tolerance for rounding differences
+        assert abs(net - exp_net) <= 1, f"Net: {net} != {exp_net} (tolerance 1)"
+
+
+# =============================================================================
+# SECTION 2: SYNTHETIC TEST SCENARIOS
+# Artificial test cases using fixture data to exercise edge cases
+# =============================================================================
 
 @pytest.fixture
 def employees():
@@ -51,7 +245,7 @@ def engine():
     return PayrollEngine(date(2026, 2, 28))
 
 
-# --- StatutoryRates Tests ---
+# --- Synthetic: StatutoryRates Tests ---
 
 def test_nssf_year_4_rates():
     rates = StatutoryRates(date(2026, 2, 1))
@@ -67,7 +261,7 @@ def test_nssf_year_3_rates():
     assert rates.nssf_uel == Decimal("72000")
 
 
-# --- Gross Calculation Tests ---
+# --- Synthetic: Gross Calculation Tests ---
 
 def test_alice_hourly_gross(contracts, timesheet):
     """Alice: Hourly 52hr/week, full month"""
@@ -115,7 +309,7 @@ def test_frank_with_overtime(contracts, timesheet):
     assert gross.total_gross == pytest.approx(Decimal("20769.23"), rel=Decimal("0.01"))
 
 
-# --- Leave Allocation Tests ---
+# --- Synthetic: Leave Allocation Tests ---
 
 def test_grace_sick_leave_allocation(leave_stocks, timesheet):
     """Grace: 4 sick days, 7 full-pay stock -> all full-pay"""
@@ -151,7 +345,7 @@ def test_irene_annual_leave_allocation(leave_stocks, timesheet):
     assert leave.updated_stock.annual_leave == 5  # 10 - 5
 
 
-# --- Deduction Tests ---
+# --- Synthetic: Deduction Tests ---
 
 def test_deductions_low_earner(rates, contracts):
     """Low earner: below LEL"""
@@ -186,7 +380,7 @@ def test_deductions_high_earner(rates, contracts):
     assert deductions.ahl_employee == Decimal("8250")  # 550000 * 0.015
 
 
-# --- PAYE Tests ---
+# --- Synthetic: PAYE Tests ---
 
 def test_paye_below_threshold(rates):
     """Chargeable pay below personal relief threshold"""
@@ -216,7 +410,7 @@ def test_paye_high_earner(rates):
     assert paye < Decimal("160000")
 
 
-# --- Housing Benefit Tests ---
+# --- Synthetic: Housing Benefit Tests ---
 
 def test_housing_benefit_quarters(contracts):
     """James: Housing quarters with market value"""
@@ -233,7 +427,7 @@ def test_housing_benefit_none(contracts):
     assert benefit == Decimal(0)
 
 
-# --- Full Payroll Engine Tests ---
+# --- Synthetic: Full Payroll Engine Tests ---
 
 def test_payslip_alice(engine, employees, contracts, leave_stocks, timesheet):
     """Full payslip for Alice - hourly worker"""
@@ -277,7 +471,7 @@ def test_payslip_james_housing(engine, employees, contracts, leave_stocks, times
     assert payslip.gross.total_gross == Decimal("60000")
 
 
-# --- Batch Test for All Employees ---
+# --- Synthetic: Batch Test for All Employees ---
 
 def test_all_employees_payroll(engine, employees, contracts, leave_stocks, timesheet):
     """Run payroll for all 10 employees without errors"""

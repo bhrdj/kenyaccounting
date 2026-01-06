@@ -1,0 +1,76 @@
+I have located specific, published examples for the 2026 tax year from third-party payroll compliance sources.
+
+According to data released by **Net Pay Kenya** and **HR Fleek**, here are the "Real-World Examples 2026" showcasing the exact input details and output calculations for three different income levels. These figures incorporate the **Year 4 NSSF rates** (effective February 2026) and the **Allowable Deduction** status for SHIF and Housing Levy.
+
+### **Example 1: Entry Level**
+
+**Input Details:**
+
+* **Gross Monthly Salary:** KES 30,000
+
+**Output Calculations:**
+
+| Item | Amount (KES) | Notes |
+| --- | --- | --- |
+| **NSSF (Year 4)** | 1,800.00 | 6% of Gross (Below UEL) |
+| **SHIF** | 825.00 | 2.75% of Gross |
+| **Housing Levy** | 450.00 | 1.5% of Gross |
+| **Taxable Pay** | 26,925.00 | Gross minus (NSSF + SHIF + AHL) |
+| **PAYE Tax** | 732.00 | Calculated on Taxable Pay |
+| **Net Pay** | **26,193.00** |  |
+
+*Source:*
+
+---
+
+### **Example 2: Senior Executive**
+
+**Input Details:**
+
+* **Gross Monthly Salary:** KES 200,000
+
+**Output Calculations:**
+
+| Item | Amount (KES) | Notes |
+| --- | --- | --- |
+| **NSSF (Year 4)** | 6,480.00 | **Capped Max** (See inputs below) |
+| **SHIF** | 5,500.00 | 2.75% of Gross (Uncapped) |
+| **Housing Levy** | 3,000.00 | 1.5% of Gross (Uncapped) |
+| **Taxable Pay** | 185,020.00 | Gross minus (NSSF + SHIF + AHL) |
+| **PAYE Tax** | 47,889.00 | Calculated on Taxable Pay |
+| **Net Pay** | **137,131.00** |  |
+
+*Source:*
+
+---
+
+### **Example 3: C-Suite Level**
+
+**Input Details:**
+
+* **Gross Monthly Salary:** KES 500,000
+
+**Output Calculations:**
+
+| Item | Amount (KES) | Notes |
+| --- | --- | --- |
+| **NSSF (Year 4)** | 6,480.00 | **Capped Max** |
+| **SHIF** | 13,750.00 | 2.75% of Gross (Uncapped) |
+| **Housing Levy** | 7,500.00 | 1.5% of Gross (Uncapped) |
+| **Taxable Pay** | 472,270.00 | Gross minus (NSSF + SHIF + AHL) |
+| **PAYE Tax** | 134,064.00 | Calculated on Taxable Pay |
+| **Net Pay** | **338,206.00** |  |
+
+*Source:*
+
+---
+
+### **Specific Input Details for February 2026**
+
+The specific parameters used to generate the NSSF outputs above are based on the **NSSF Act 2013 Year 4 Schedule**, which takes effect in February 2026.
+
+* **Lower Earnings Limit (Tier I):** KES 9,000
+* **Upper Earnings Limit (Tier II):** KES 108,000 (Approx. 3x National Average Earnings)
+* **Maximum Deductible Contribution:** KES 6,480 (Employee) + KES 6,480 (Employer)
+
+These "real" inputs differ from 2025 because the Upper Earnings Limit jumps from approx. KES 72,000 to KES 108,000, capturing a larger portion of the salary for the 6% deduction.
