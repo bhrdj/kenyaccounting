@@ -4,6 +4,7 @@ from pathlib import Path
 
 from src.loaders import load_employees, load_contracts, load_leave_stocks, load_timesheet
 from src.calculators import PayrollEngine
+from src.rates import KenyanHolidays
 from src.outputs import (
     PayslipRenderer,
     BankFileGenerator,
@@ -30,6 +31,16 @@ year = st.sidebar.selectbox("Year", options=[2025, 2026, 2027], index=1)
 month = st.sidebar.selectbox("Month", options=list(range(1, 13)), index=1, format_func=lambda m: date(2000, m, 1).strftime("%B"))
 
 payroll_date = date(year, month, 28)  # Use 28th as safe end-of-month
+
+# Show month info
+working_days = KenyanHolidays.count_working_days(year, month)
+holidays = KenyanHolidays.get_holidays_for_month(year, month)
+st.sidebar.caption(f"Working days: {working_days}")
+if holidays:
+    holiday_list = ", ".join(h.name + (" *" if h.is_estimated else "") for h in holidays)
+    st.sidebar.caption(f"Holidays: {holiday_list}")
+    if any(h.is_estimated for h in holidays):
+        st.sidebar.caption("* estimated date")
 
 
 @st.cache_data
@@ -123,8 +134,13 @@ if "payslips" in st.session_state:
 
         data = []
         for ps in payslips:
-            data.append({
+            row = {
                 "Name": ps.employee.name,
+                "Base": float(ps.gross.base_pay),
+            }
+            if ps.gross.housing_allowance > 0:
+                row["Housing"] = float(ps.gross.housing_allowance)
+            row.update({
                 "Gross": float(ps.gross.total_gross),
                 "NSSF T1": float(ps.deductions.nssf_tier_1),
                 "NSSF T2": float(ps.deductions.nssf_tier_2),
@@ -133,8 +149,19 @@ if "payslips" in st.session_state:
                 "PAYE": float(ps.deductions.paye),
                 "Net": float(ps.net_pay),
             })
+            data.append(row)
         df = pd.DataFrame(data)
         st.dataframe(df, use_container_width=True)
+
+        # Show warnings if any
+        warnings_found = False
+        for ps in payslips:
+            if ps.warnings:
+                if not warnings_found:
+                    st.subheader("Warnings")
+                    warnings_found = True
+                for w in ps.warnings:
+                    st.warning(f"{ps.employee.name}: {w}")
 
     with tab3:
         st.subheader("Download Files")

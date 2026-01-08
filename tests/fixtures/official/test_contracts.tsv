@@ -1,0 +1,4 @@
+employee_id	contract_type	base_salary	weekly_hours	housing_type	housing_market_value	nssf_tier	start_date	end_date	status	salary_basis	hourly_divisor
+1	fixed_monthly	30000		none		standard	2026-01-01		active	gross	monthly
+2	fixed_monthly	200000		none		standard	2026-01-01		active	gross	monthly
+3	fixed_monthly	500000		none		standard	2026-01-01		active	gross	monthly

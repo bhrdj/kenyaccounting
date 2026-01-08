@@ -9,9 +9,48 @@ from .rates import StatutoryRates
 
 
 class GrossCalculator:
-    def __init__(self, contract: Contract, timesheet_days: list[TimesheetDay]):
+    HOUSING_RATE = Decimal("0.15")
+    STATUTORY_DIVISOR = Decimal("225.333333")  # 52 * 52 / 12
+
+    def __init__(self, contract: Contract, timesheet_days: list[TimesheetDay], payroll_date: date = None):
         self.contract = contract
         self.timesheet_days = timesheet_days
+        self.payroll_date = payroll_date
+
+    def _get_divisor(self) -> Decimal:
+        """
+        Get the hourly divisor based on contract settings.
+
+        Options:
+        - 'statutory' or '225': Use 225.33 (52 weeks * 52 hours / 12 months)
+        - 'monthly': Calculate based on working days in the payroll month
+        - A number: Use that custom divisor
+        """
+        from .rates import KenyanHolidays
+
+        divisor_setting = self.contract.hourly_divisor.lower().strip()
+
+        if divisor_setting in ("statutory", "225"):
+            return self.STATUTORY_DIVISOR
+
+        if divisor_setting == "monthly":
+            if self.payroll_date is None:
+                # Fallback to statutory if no payroll date
+                return self.STATUTORY_DIVISOR
+            # Calculate based on working days in the month
+            weekly_hours = self.contract.weekly_hours or 45
+            return KenyanHolidays.get_expected_hours(
+                self.payroll_date.year,
+                self.payroll_date.month,
+                weekly_hours,
+            )
+
+        # Try to parse as a custom number
+        try:
+            return Decimal(divisor_setting)
+        except:
+            # Default to statutory if parsing fails
+            return self.STATUTORY_DIVISOR
 
     def calculate(self) -> GrossBreakdown:
         if self.contract.contract_type == "hourly":
@@ -21,36 +60,76 @@ class GrossCalculator:
         elif self.contract.contract_type == "prorated_min_wage":
             return self._calc_prorated_min_wage()
 
+    def _compute_housing(self, base_pay: Decimal) -> tuple[Decimal, Decimal, Decimal]:
+        """
+        Compute base pay, housing allowance, and total gross based on housing_type and salary_basis.
+
+        Returns: (actual_base, housing_allowance, total_gross)
+
+        Per Kenya Employment Act Section 31 and Regulation of Wages Order:
+        - If employer does NOT provide housing (housing_type='none'), a 15% housing
+          allowance MUST be paid. The salary_basis determines interpretation:
+          - salary_basis='base': input is base pay, housing = 15%, gross = base * 1.15
+          - salary_basis='gross': input is gross, base = gross / 1.15, housing = gross - base
+        - If employer provides housing (housing_type='quarters'), no cash allowance
+          (taxable benefit is calculated separately by HousingBenefitCalculator)
+        """
+        if self.contract.housing_type == "quarters":
+            # Employer provides housing - no cash allowance needed
+            actual_base = base_pay
+            housing_allowance = Decimal(0)
+            total_gross = base_pay
+        else:
+            # No housing provided (housing_type='none') - 15% allowance required by law
+            if self.contract.salary_basis == "base":
+                # Input is base pay, compute housing allowance
+                actual_base = base_pay
+                housing_allowance = base_pay * self.HOUSING_RATE
+                total_gross = actual_base + housing_allowance
+            else:
+                # Input is gross pay, back-calculate base
+                total_gross = base_pay  # input is actually gross
+                actual_base = total_gross / (Decimal(1) + self.HOUSING_RATE)
+                housing_allowance = total_gross - actual_base
+
+        return actual_base, housing_allowance, total_gross
+
     def _calc_hourly(self) -> GrossBreakdown:
-        divisor = Decimal(self.contract.weekly_hours * 52) / Decimal(12)
+        divisor = self._get_divisor()
         hourly_rate = self.contract.base_salary / divisor
 
         total_normal = sum(d.hours_normal for d in self.timesheet_days)
         total_ot_1_5 = sum(d.hours_ot_1_5 for d in self.timesheet_days)
         total_ot_2_0 = sum(d.hours_ot_2_0 for d in self.timesheet_days)
 
-        base_pay = hourly_rate * total_normal
+        raw_base_pay = hourly_rate * total_normal
         overtime_1_5 = hourly_rate * Decimal("1.5") * total_ot_1_5
         overtime_2_0 = hourly_rate * Decimal("2.0") * total_ot_2_0
 
+        # For hourly, apply housing to the total earned (base + overtime)
+        earned = raw_base_pay + overtime_1_5 + overtime_2_0
+        actual_base, housing_allowance, total_gross = self._compute_housing(earned)
+
         return GrossBreakdown(
-            base_pay=base_pay,
+            base_pay=actual_base,
             overtime_1_5=overtime_1_5,
             overtime_2_0=overtime_2_0,
+            housing_allowance=housing_allowance,
             housing_benefit=Decimal(0),
-            total_gross=base_pay + overtime_1_5 + overtime_2_0,
+            total_gross=total_gross,
         )
 
     def _calc_fixed_monthly(self) -> GrossBreakdown:
-        # For fixed monthly, the base_salary is the full monthly amount
-        # We assume full salary unless there are unpaid days to deduct
-        # (unpaid day handling happens via LeaveCalculator adjusting pay)
+        # For fixed monthly, base_salary is interpreted based on salary_basis
+        actual_base, housing_allowance, total_gross = self._compute_housing(self.contract.base_salary)
+
         return GrossBreakdown(
-            base_pay=self.contract.base_salary,
+            base_pay=actual_base,
             overtime_1_5=Decimal(0),
             overtime_2_0=Decimal(0),
+            housing_allowance=housing_allowance,
             housing_benefit=Decimal(0),
-            total_gross=self.contract.base_salary,
+            total_gross=total_gross,
         )
 
     def _calc_prorated_min_wage(self) -> GrossBreakdown:
@@ -58,14 +137,17 @@ class GrossCalculator:
         std_monthly_hours = Decimal(self.contract.weekly_hours * 4)
         worked_hours = sum(d.hours_normal for d in self.timesheet_days)
         fraction = worked_hours / std_monthly_hours
-        base_pay = self.contract.base_salary * fraction
+        raw_base_pay = self.contract.base_salary * fraction
+
+        actual_base, housing_allowance, total_gross = self._compute_housing(raw_base_pay)
 
         return GrossBreakdown(
-            base_pay=base_pay,
+            base_pay=actual_base,
             overtime_1_5=Decimal(0),
             overtime_2_0=Decimal(0),
+            housing_allowance=housing_allowance,
             housing_benefit=Decimal(0),
-            total_gross=base_pay,
+            total_gross=total_gross,
         )
 
 
@@ -190,6 +272,75 @@ class HousingBenefitCalculator:
         return Decimal(0)
 
 
+class MinimumWageValidator:
+    """Validates that base pay meets minimum wage requirements."""
+
+    MIN_WAGE_NAIROBI = Decimal("16113.75")  # General labourer monthly
+    HOUSING_RATE = Decimal("0.15")
+
+    def __init__(
+        self,
+        base_pay: Decimal,
+        contract: Contract,
+        hours_worked: Decimal,
+        payroll_date: date,
+    ):
+        self.base_pay = base_pay
+        self.contract = contract
+        self.hours_worked = hours_worked
+        self.payroll_date = payroll_date
+
+    def validate(self) -> tuple[bool, str | None]:
+        """
+        Check if earnings meet minimum wage for hours worked.
+        Returns (is_valid, warning_message).
+
+        For hourly workers: if worked >= expected full-time hours, base should >= min wage.
+        For fixed monthly: base pay should >= min wage.
+        """
+        from .rates import KenyanHolidays
+
+        if self.contract.contract_type == "prorated_min_wage":
+            # Prorated workers are expected to be below full minimum
+            return True, None
+
+        if self.contract.contract_type == "hourly":
+            # Get expected hours for full-time work this month
+            weekly_hours = self.contract.weekly_hours or 45
+            expected_hours = KenyanHolidays.get_expected_hours(
+                self.payroll_date.year,
+                self.payroll_date.month,
+                weekly_hours,
+            )
+
+            # Calculate hourly minimum wage
+            # Monthly min wage / expected monthly hours
+            hourly_min = self.MIN_WAGE_NAIROBI / expected_hours
+
+            # Calculate effective hourly rate from actual earnings
+            if self.hours_worked > 0:
+                effective_hourly = self.base_pay / self.hours_worked
+            else:
+                return True, None  # No hours worked
+
+            if effective_hourly < hourly_min:
+                return False, (
+                    f"Effective hourly rate KES {effective_hourly:,.2f} is below "
+                    f"minimum KES {hourly_min:,.2f}/hr (based on {expected_hours:.0f} "
+                    f"expected hours in {self.payroll_date.strftime('%B %Y')}). "
+                    f"Base pay KES {self.base_pay:,.2f} for {self.hours_worked:.0f} hours."
+                )
+            return True, None
+        else:
+            # For fixed monthly, check actual base pay
+            if self.base_pay < self.MIN_WAGE_NAIROBI:
+                return False, (
+                    f"Base pay KES {self.base_pay:,.2f} is below Nairobi minimum wage "
+                    f"KES {self.MIN_WAGE_NAIROBI:,.2f}. Is this employee part-time?"
+                )
+            return True, None
+
+
 class PayrollEngine:
     def __init__(self, payroll_date: date):
         self.payroll_date = payroll_date
@@ -207,20 +358,21 @@ class PayrollEngine:
         leave = leave_calc.allocate()
 
         # 2. Calculate gross
-        gross_calc = GrossCalculator(contract, timesheet_days)
+        gross_calc = GrossCalculator(contract, timesheet_days, self.payroll_date)
         gross = gross_calc.calculate()
 
         # 3. Apply leave adjustments for fixed monthly contracts
         if contract.contract_type == "fixed_monthly":
             gross = self._apply_leave_adjustments(gross, leave, contract)
 
-        # 4. Add housing benefit
+        # 4. Add housing benefit (for quarters - non-cash taxable benefit)
         housing_calc = HousingBenefitCalculator(contract, gross.total_gross)
         housing_benefit = housing_calc.calculate()
         gross = GrossBreakdown(
             base_pay=gross.base_pay,
             overtime_1_5=gross.overtime_1_5,
             overtime_2_0=gross.overtime_2_0,
+            housing_allowance=gross.housing_allowance,
             housing_benefit=housing_benefit,
             total_gross=gross.total_gross,
         )
@@ -262,7 +414,17 @@ class PayrollEngine:
         # 8. Calculate net pay (housing benefit is non-cash, not added)
         net_pay = gross.total_gross - deductions.total
 
-        # 9. Format period string
+        # 9. Validate minimum wage
+        warnings = []
+        hours_worked = sum(d.hours_normal for d in timesheet_days)
+        min_wage_validator = MinimumWageValidator(
+            gross.base_pay, contract, hours_worked, self.payroll_date
+        )
+        is_valid, warning = min_wage_validator.validate()
+        if not is_valid and warning:
+            warnings.append(warning)
+
+        # 10. Format period string
         period = self.payroll_date.strftime("%B %Y")
 
         return PaySlip(
@@ -274,6 +436,7 @@ class PayrollEngine:
             leave=leave,
             net_pay=net_pay,
             days_worked=timesheet_days,
+            warnings=warnings if warnings else None,
         )
 
     def _apply_leave_adjustments(
@@ -281,7 +444,7 @@ class PayrollEngine:
     ) -> GrossBreakdown:
         # For fixed monthly, deduct for unpaid days and half-pay sick days
         # Assume 22 working days in a month
-        daily_rate = contract.base_salary / Decimal(22)
+        daily_rate = gross.base_pay / Decimal(22)
 
         # Half pay for sick_half_pay_used days (deduct 50%)
         half_pay_deduction = daily_rate * Decimal("0.5") * leave.sick_half_pay_used
@@ -291,10 +454,18 @@ class PayrollEngine:
 
         adjusted_base = gross.base_pay - half_pay_deduction - unpaid_deduction
 
+        # Recalculate housing allowance proportionally if applicable
+        if gross.housing_allowance > 0:
+            ratio = adjusted_base / gross.base_pay if gross.base_pay > 0 else Decimal(1)
+            adjusted_housing = gross.housing_allowance * ratio
+        else:
+            adjusted_housing = Decimal(0)
+
         return GrossBreakdown(
             base_pay=adjusted_base,
             overtime_1_5=gross.overtime_1_5,
             overtime_2_0=gross.overtime_2_0,
+            housing_allowance=adjusted_housing,
             housing_benefit=gross.housing_benefit,
-            total_gross=adjusted_base + gross.overtime_1_5 + gross.overtime_2_0,
+            total_gross=adjusted_base + gross.overtime_1_5 + gross.overtime_2_0 + adjusted_housing,
         )

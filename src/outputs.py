@@ -58,8 +58,10 @@ class PayslipRenderer:
             lines.append(f"Overtime @1.5x:      {payslip.gross.overtime_1_5:>12,.2f}")
         if payslip.gross.overtime_2_0 > 0:
             lines.append(f"Overtime @2.0x:      {payslip.gross.overtime_2_0:>12,.2f}")
+        if payslip.gross.housing_allowance > 0:
+            lines.append(f"Housing allowance:   {payslip.gross.housing_allowance:>12,.2f}")
         if payslip.gross.housing_benefit > 0:
-            lines.append(f"Housing benefit:     {payslip.gross.housing_benefit:>12,.2f} (taxable)")
+            lines.append(f"Housing benefit:     {payslip.gross.housing_benefit:>12,.2f} (non-cash)")
         lines.append(f"                     {'-' * 12}")
         lines.append(f"GROSS PAY:           {payslip.gross.total_gross:>12,.2f}")
         lines.append("")
@@ -81,6 +83,13 @@ class PayslipRenderer:
         lines.append("=" * 60)
         lines.append(f"NET PAY:             {payslip.net_pay:>12,.2f}")
         lines.append("=" * 60)
+
+        # Warnings
+        if payslip.warnings:
+            lines.append("")
+            lines.append("WARNINGS:")
+            for warning in payslip.warnings:
+                lines.append(f"  * {warning}")
 
         return "\n".join(lines)
 

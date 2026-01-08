@@ -264,49 +264,66 @@ def test_nssf_year_3_rates():
 # --- Synthetic: Gross Calculation Tests ---
 
 def test_alice_hourly_gross(contracts, timesheet):
-    """Alice: Hourly 52hr/week, full month"""
-    calc = GrossCalculator(contracts[1], timesheet[1])
+    """Alice: Hourly 52hr/week, full month, with 15% housing allowance"""
+    calc = GrossCalculator(contracts[1], timesheet[1], date(2026, 2, 28))
     gross = calc.calculate()
-    # 24 days worked, 9hr days + 7hr Saturday half-days
-    # Divisor = 52 * 52 / 12 = 225.33
-    assert gross.total_gross == pytest.approx(Decimal("14874.23"), rel=Decimal("0.01"))
+    # 20 working days in Feb 2026, 52hr/week = 10.4hr/day
+    # Monthly divisor = 20 * 10.4 = 208 hours
+    # 208 hours worked at 16113.75 rate
+    # Base = 16113.75, Housing = 15% = 2417.06, Gross = 18530.81
+    assert gross.base_pay == pytest.approx(Decimal("16113.75"), rel=Decimal("0.01"))
+    assert gross.housing_allowance == pytest.approx(Decimal("2417.06"), rel=Decimal("0.01"))
+    assert gross.total_gross == pytest.approx(Decimal("18530.81"), rel=Decimal("0.01"))
     assert gross.overtime_1_5 == Decimal(0)
     assert gross.overtime_2_0 == Decimal(0)
 
 
 def test_bob_hourly_gross(contracts, timesheet):
-    """Bob: Hourly 45hr/week"""
-    calc = GrossCalculator(contracts[2], timesheet[2])
+    """Bob: Hourly 45hr/week, with 15% housing allowance"""
+    calc = GrossCalculator(contracts[2], timesheet[2], date(2026, 2, 28))
     gross = calc.calculate()
-    # Divisor = 45 * 52 / 12 = 195
-    assert gross.total_gross == pytest.approx(Decimal("23076.92"), rel=Decimal("0.01"))
+    # 20 working days in Feb 2026, 45hr/week = 9hr/day
+    # Monthly divisor = 20 * 9 = 180 hours
+    # 180 hours worked at 25000 rate
+    # Base = 25000, Housing = 15% = 3750, Gross = 28750
+    assert gross.base_pay == pytest.approx(Decimal("25000"), rel=Decimal("0.01"))
+    assert gross.housing_allowance == pytest.approx(Decimal("3750"), rel=Decimal("0.01"))
+    assert gross.total_gross == pytest.approx(Decimal("28750"), rel=Decimal("0.01"))
 
 
 def test_carol_prorated_min_wage(contracts, timesheet):
-    """Carol: Prorated minimum wage, 18 days worked"""
-    calc = GrossCalculator(contracts[3], timesheet[3])
+    """Carol: Prorated minimum wage, 18 days worked, with 15% housing"""
+    calc = GrossCalculator(contracts[3], timesheet[3], date(2026, 2, 28))
     gross = calc.calculate()
     # Standard monthly hours = 45 * 4 = 180
     # Worked hours = 18 * 9 = 162
     # Fraction = 162 / 180 = 0.9
-    assert gross.total_gross == pytest.approx(Decimal("14502.38"), rel=Decimal("0.01"))
+    # Base = 14502.38, Housing = 15% = 2175.36, Gross = 16677.73
+    assert gross.base_pay == pytest.approx(Decimal("14502.38"), rel=Decimal("0.01"))
+    assert gross.housing_allowance == pytest.approx(Decimal("2175.36"), rel=Decimal("0.01"))
+    assert gross.total_gross == pytest.approx(Decimal("16677.73"), rel=Decimal("0.01"))
 
 
 def test_david_fixed_monthly(contracts, timesheet):
-    """David: Fixed monthly 50,000"""
-    calc = GrossCalculator(contracts[4], timesheet[4])
+    """David: Fixed monthly 50,000 base, with 15% housing"""
+    calc = GrossCalculator(contracts[4], timesheet[4], date(2026, 2, 28))
     gross = calc.calculate()
-    assert gross.total_gross == Decimal("50000")
+    # Base = 50000, Housing = 15% = 7500, Gross = 57500
+    assert gross.base_pay == Decimal("50000")
+    assert gross.housing_allowance == Decimal("7500")
+    assert gross.total_gross == Decimal("57500")
 
 
 def test_frank_with_overtime(contracts, timesheet):
-    """Frank: Hourly with overtime (12hrs @1.5x, 4hrs @2.0x)"""
-    calc = GrossCalculator(contracts[6], timesheet[6])
+    """Frank: Hourly with overtime (12hrs @1.5x, 4hrs @2.0x), with 15% housing"""
+    calc = GrossCalculator(contracts[6], timesheet[6], date(2026, 2, 28))
     gross = calc.calculate()
     # Check overtime is calculated
     assert gross.overtime_1_5 > 0
     assert gross.overtime_2_0 > 0
-    assert gross.total_gross == pytest.approx(Decimal("20769.23"), rel=Decimal("0.01"))
+    # Monthly divisor = 208 hours (20 days × 10.4hr for 52hr/week)
+    # Base + OT = 22500, Housing = 15% = 3375, Gross = 25875
+    assert gross.total_gross == pytest.approx(Decimal("25875"), rel=Decimal("0.01"))
 
 
 # --- Synthetic: Leave Allocation Tests ---
@@ -430,36 +447,46 @@ def test_housing_benefit_none(contracts):
 # --- Synthetic: Full Payroll Engine Tests ---
 
 def test_payslip_alice(engine, employees, contracts, leave_stocks, timesheet):
-    """Full payslip for Alice - hourly worker"""
+    """Full payslip for Alice - hourly worker with housing allowance"""
     payslip = engine.process(employees[1], contracts[1], timesheet[1], leave_stocks[1])
 
     assert payslip.employee.name == "Alice Wanjiku"
     assert payslip.period == "February 2026"
-    assert payslip.gross.total_gross == pytest.approx(Decimal("14874.23"), rel=Decimal("0.01"))
-    assert payslip.net_pay == pytest.approx(Decimal("13349.62"), rel=Decimal("0.01"))
+    # Monthly divisor = 208 hours (20 days × 10.4hr)
+    # Base = 16113.75, Housing = 2417.06, Gross = 18530.81
+    # Net = 16631.40 (PAYE = 0 after relief)
+    assert payslip.gross.base_pay == pytest.approx(Decimal("16113.75"), rel=Decimal("0.01"))
+    assert payslip.gross.housing_allowance == pytest.approx(Decimal("2417.06"), rel=Decimal("0.01"))
+    assert payslip.gross.total_gross == pytest.approx(Decimal("18530.81"), rel=Decimal("0.01"))
+    assert payslip.net_pay == pytest.approx(Decimal("16631.40"), rel=Decimal("0.01"))
 
 
 def test_payslip_eve_high_earner(engine, employees, contracts, leave_stocks, timesheet):
-    """Full payslip for Eve - high earner"""
+    """Full payslip for Eve - high earner with housing allowance"""
     payslip = engine.process(employees[5], contracts[5], timesheet[5], leave_stocks[5])
 
-    assert payslip.gross.total_gross == Decimal("550000")
+    # Base = 550000, Housing = 82500, Gross = 632500
+    assert payslip.gross.base_pay == Decimal("550000")
+    assert payslip.gross.housing_allowance == Decimal("82500")
+    assert payslip.gross.total_gross == Decimal("632500")
     assert payslip.deductions.nssf_tier_1 == Decimal("540")
     assert payslip.deductions.nssf_tier_2 == Decimal("5940")
-    assert payslip.deductions.paye == pytest.approx(Decimal("148930.48"), rel=Decimal("0.01"))
+    assert payslip.deductions.paye == pytest.approx(Decimal("174603.44"), rel=Decimal("0.01"))
 
 
 def test_payslip_henry_sick_leave(engine, employees, contracts, leave_stocks, timesheet):
-    """Full payslip for Henry - sick leave with half pay"""
+    """Full payslip for Henry - sick leave with half pay, plus housing"""
     payslip = engine.process(employees[8], contracts[8], timesheet[8], leave_stocks[8])
 
     # Verify leave allocation
     assert payslip.leave.sick_full_pay_used == 3
     assert payslip.leave.sick_half_pay_used == 3
 
-    # Gross should be reduced for half-pay days
-    assert payslip.gross.total_gross < Decimal("30000")
-    assert payslip.gross.total_gross == pytest.approx(Decimal("27954.55"), rel=Decimal("0.01"))
+    # Base reduced for half-pay days, then housing added
+    # Base = 27954.55, Housing = 4193.18, Gross = 32147.73
+    assert payslip.gross.base_pay == pytest.approx(Decimal("27954.55"), rel=Decimal("0.01"))
+    assert payslip.gross.housing_allowance == pytest.approx(Decimal("4193.18"), rel=Decimal("0.01"))
+    assert payslip.gross.total_gross == pytest.approx(Decimal("32147.73"), rel=Decimal("0.01"))
 
 
 def test_payslip_james_housing(engine, employees, contracts, leave_stocks, timesheet):

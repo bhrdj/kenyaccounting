@@ -43,6 +43,8 @@ def load_contracts(path: str | Path) -> list[Contract]:
                     start_date=_parse_date(row["start_date"]),
                     end_date=_parse_date(row["end_date"]) if row["end_date"] else None,
                     status=row["status"],
+                    salary_basis=row.get("salary_basis", "gross"),
+                    hourly_divisor=row.get("hourly_divisor", "monthly"),
                 )
             )
     return contracts
