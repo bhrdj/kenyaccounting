@@ -142,7 +142,7 @@ StatutoryRates
 ```
 
 Year 4 NSSF transition happens February 2026:
-- Before Feb 2026: LEL=7000, UEL=72000
+- Before Feb 2026: LEL=8000, UEL=72000
 - Feb 2026 onwards: LEL=9000, UEL=108000
 
 ---

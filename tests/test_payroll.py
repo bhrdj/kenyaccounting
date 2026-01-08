@@ -257,7 +257,7 @@ def test_nssf_year_4_rates():
 
 def test_nssf_year_3_rates():
     rates = StatutoryRates(date(2026, 1, 31))
-    assert rates.nssf_lel == Decimal("7000")
+    assert rates.nssf_lel == Decimal("8000")
     assert rates.nssf_uel == Decimal("72000")
 
 

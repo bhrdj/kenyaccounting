@@ -130,8 +130,8 @@ class StatutoryRates:
             self.nssf_lel = Decimal("9000")
             self.nssf_uel = Decimal("108000")
         else:
-            # Year 3: LEL = 7,000, UEL = 72,000
-            self.nssf_lel = Decimal("7000")
+            # Year 3: LEL = 8,000, UEL = 72,000
+            self.nssf_lel = Decimal("8000")
             self.nssf_uel = Decimal("72000")
 
         self.nssf_rate = Decimal("0.06")

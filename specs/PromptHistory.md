@@ -117,3 +117,19 @@ update the prompthistory
 you were supposed to do a technical spec but you couldn't help coding up the entire app prototype?
 
 (Result: 4 commits, 6 modules, 23 passing tests, working Streamlit app. Phases 1-6 complete.)
+
+## Claude Code - NSSF Year 3 Rate Fix Session
+
+### NSSF Discrepancy Report
+The online tax calculator gave me the following after inputting gross pay 57500:
+NSSF Tier I: 480.00
+NSSF Tier II: 2,970.00
+
+but your kenyaccounting gave:
+NSSF Tier 1:               540.00
+NSSF Tier 2:             2,910.00
+
+### January 2026 Support Request
+can you update the calculator to also be able to handle january 2026?
+
+(Result: Fixed Year 3 NSSF LEL from 7,000 to correct value of 8,000. System was already date-aware with Feb 2026 transition, just had wrong Year 3 rate. Updated src/rates.py, specs/technical_spec.md, and tests/test_payroll.py. All 35 tests passing.)
