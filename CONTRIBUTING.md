@@ -95,6 +95,7 @@ To maintain a production-ready codebase, all contributions must adhere to the fo
 
 ## Testing
 
+*   **TDD (Test-Driven Development)**: We strictly follow a TDD approach. Write your unit tests *before* writing the implementation code. This ensures all requirements are met and logic is sound from the start.
 *   **Mandatory Tests**: Every PR that introduces logic must include corresponding unit tests in `tests/`.
 *   **Regression Testing**: Ensure existing tests pass before pushing.
     ```bash
