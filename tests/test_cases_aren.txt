@@ -1,0 +1,151 @@
+https://aren.software/calculators/kenya/forms/deducalc
+
+
+
+NET PAY CALCULATOR
+January 2026
+Gross Pay	 	10,000.00
+Deductions:	 	 
+  PAYE	0.00	 
+  NSSF (Tier I)	480.00	 
+  NSSF (Tier II)	120.00	 
+  SHIF	300.00	 
+  Housing Levy	150.00	 
+Total Deductions	 	1,050.00
+Net Pay	 	8,950.00
+PAYE Information:	 	 
+Gross Pay	 	10,000.00
+Allowable Deductions	 	1,050.00
+Taxable Pay	 	8,950.00
+Personal Relief	 	2,400.00
+
+
+
+NET PAY CALCULATOR
+January 2026
+Gross Pay	 	15,000.00
+Deductions:	 	 
+  PAYE	0.00	 
+  NSSF (Tier I)	480.00	 
+  NSSF (Tier II)	420.00	 
+  SHIF	413.00	 
+  Housing Levy	225.00	 
+Total Deductions	 	1,538.00
+Net Pay	 	13,462.00
+PAYE Information:	 	 
+Gross Pay	 	15,000.00
+Allowable Deductions	 	1,538.00
+Taxable Pay	 	13,462.00
+Personal Relief	 	2,400.00
+
+
+
+
+NET PAY CALCULATOR
+January 2026
+Gross Pay	 	20,000.00
+Deductions:	 	 
+  PAYE	0.00	 
+  NSSF (Tier I)	480.00	 
+  NSSF (Tier II)	720.00	 
+  SHIF	550.00	 
+  Housing Levy	300.00	 
+Total Deductions	 	2,050.00
+Net Pay	 	17,950.00
+PAYE Information:	 	 
+Gross Pay	 	20,000.00
+Allowable Deductions	 	2,050.00
+Taxable Pay	 	17,950.00
+Personal Relief	 	2,400.00
+
+
+
+
+
+
+NET PAY CALCULATOR
+January 2026
+Gross Pay	 	25,000.00
+Deductions:	 	 
+  PAYE	0.00	 
+  NSSF (Tier I)	480.00	 
+  NSSF (Tier II)	1,020.00	 
+  SHIF	688.00	 
+  Housing Levy	375.00	 
+Total Deductions	 	2,563.00
+Net Pay	 	22,437.00
+PAYE Information:	 	 
+Gross Pay	 	25,000.00
+Allowable Deductions	 	2,563.00
+Taxable Pay	 	22,437.00
+Personal Relief	 	2,400.00
+
+
+
+
+
+
+NET PAY CALCULATOR
+January 2026
+Gross Pay	 	30,000.00
+Deductions:	 	 
+  PAYE	731.25	 
+  NSSF (Tier I)	480.00	 
+  NSSF (Tier II)	1,320.00	 
+  SHIF	825.00	 
+  Housing Levy	450.00	 
+Total Deductions	 	3,806.25
+Net Pay	 	26,193.75
+PAYE Information:	 	 
+Gross Pay	 	30,000.00
+Allowable Deductions	 	3,075.00
+Taxable Pay	 	26,925.00
+Personal Relief	 	2,400.00
+
+
+
+
+
+
+
+
+
+
+NET PAY CALCULATOR
+January 2026
+Gross Pay	 	50,000.00
+Deductions:	 	 
+  PAYE	5,845.85	 
+  NSSF (Tier I)	480.00	 
+  NSSF (Tier II)	2,520.00	 
+  SHIF	1,375.00	 
+  Housing Levy	750.00	 
+Total Deductions	 	10,970.85
+Net Pay	 	39,029.15
+PAYE Information:	 	 
+Gross Pay	 	50,000.00
+Allowable Deductions	 	5,125.00
+Taxable Pay	 	44,875.00
+Personal Relief	 	2,400.00
+
+
+
+
+NET PAY CALCULATOR
+January 2026
+Gross Pay	 	80,000.00
+Deductions:	 	 
+  PAYE	14,067.35	 
+  NSSF (Tier I)	480.00	 
+  NSSF (Tier II)	3,840.00	 
+  SHIF	2,200.00	 
+  Housing Levy	1,200.00	 
+Total Deductions	 	21,787.35
+Net Pay	 	58,212.65
+PAYE Information:	 	 
+Gross Pay	 	80,000.00
+Allowable Deductions	 	7,720.00
+Taxable Pay	 	72,280.00
+Personal Relief	 	2,400.00
+
+
