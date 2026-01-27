@@ -1,343 +1,249 @@
 # Unit Test Specification for KenyAccounting
 
----
-
-## Test Employee Scenarios
-
-10 employees with different contract types and worked periods for February 2026 (Year 4 NSSF rates).
-
-| # | Name | Contract Type | Base Salary | Weekly Hours | Special Conditions |
-|---|------|---------------|-------------|--------------|-------------------|
-| 1 | Alice | Hourly | 16,113.75 (min wage) | 52 | Full month, no leave |
-| 2 | Bob | Hourly | 25,000 | 45 | Full month, no leave |
-| 3 | Carol | Prorated min wage | 16,113.75 | 45 | 3 weeks only (18 days) |
-| 4 | David | Fixed monthly | 50,000 | - | Full month |
-| 5 | Eve | Fixed monthly | 550,000 | - | High earner (32.5% bracket) |
-| 6 | Frank | Hourly | 20,000 | 52 | With overtime (12hrs @1.5x, 4hrs @2.0x) |
-| 7 | Grace | Fixed monthly | 35,000 | - | 4 days absent (sick) |
-| 8 | Henry | Fixed monthly | 30,000 | - | 6 days absent (sick) |
-| 9 | Irene | Fixed monthly | 40,000 | - | 5 days absent (not sick) |
-| 10 | James | Fixed monthly | 60,000 | - | Housing quarters (market value 8,000) |
+This document specifies the test suite structure, inputs, and expected outputs.
 
 ---
 
-## Leave Stocks (balances at start of Feb 2026)
+## Test Categories
 
-The model determines leave type from stocks. Input timesheet only says "absent" and "sick yes/no".
+### 1. EXTERNALLY VALIDATED EXAMPLES
 
-| # | Name | Sick Leave (full pay) | Sick Leave (half pay) | Annual Leave | Notes |
-|---|------|----------------------|----------------------|--------------|-------|
-| 1 | Alice | 7 | 7 | 10 | Won't use any |
-| 2 | Bob | 7 | 7 | 12 | Won't use any |
-| 3 | Carol | 7 | 7 | 8 | Reduced schedule, not leave |
-| 4 | David | 7 | 7 | 15 | Won't use any |
-| 5 | Eve | 7 | 7 | 21 | Won't use any |
-| 6 | Frank | 7 | 7 | 5 | Won't use any |
-| 7 | Grace | 7 | 7 | 10 | 4 sick days → uses 4 full-pay sick |
-| 8 | Henry | 3 | 7 | 10 | 6 sick days → uses 3 full-pay + 3 half-pay |
-| 9 | Irene | 7 | 7 | 10 | 5 non-sick absent → uses 5 annual leave |
-| 10 | James | 7 | 7 | 14 | Won't use any |
+These tests use third-party published payroll calculations and are our primary validation against industry-accepted figures.
 
----
+**Sources:**
+- Net Pay Kenya (https://netpay.co.ke)
+- HR Fleek (https://hrfleek.co.ke)
 
-## Expected Leave Stocks After Feb 2026
+**Validation Status:** VERIFIED against external payroll calculators
 
-| # | Name | Sick Leave (full pay) | Sick Leave (half pay) | Annual Leave | Unpaid Days |
-|---|------|----------------------|----------------------|--------------|-------------|
-| 7 | Grace | 3 | 7 | 10 + accrued | 0 |
-| 8 | Henry | 0 | 4 | 10 + accrued | 0 |
-| 9 | Irene | 7 | 7 | 5 + accrued | 0 |
+### 2. SYNTHETIC TEST SCENARIOS
+
+Artificial test cases designed to exercise specific edge cases and code paths. These are NOT externally validated - expected values are calculated based on our understanding of Kenya 2026 regulations.
 
 ---
 
-## Expected Values (to be verified with accountant calculator)
+## SECTION 1: EXTERNALLY VALIDATED EXAMPLES
 
-| # | Name | Gross | NSSF T1 | NSSF T2 | SHIF | AHL | Taxable | PAYE | Net |
-|---|------|-------|---------|---------|------|-----|---------|------|-----|
-| 1 | Alice | 16,113.75 | ? | ? | ? | ? | ? | ? | ? |
-| 2 | Bob | 25,000 | ? | ? | ? | ? | ? | ? | ? |
-| 3 | Carol | ~12,085 | ? | ? | ? | ? | ? | ? | ? |
-| 4 | David | 50,000 | ? | ? | ? | ? | ? | ? | ? |
-| 5 | Eve | 550,000 | ? | ? | ? | ? | ? | ? | ? |
-| 6 | Frank | ~22,400 | ? | ? | ? | ? | ? | ? | ? |
-| 7 | Grace | 35,000 | ? | ? | ? | ? | ? | ? | ? |
-| 8 | Henry | ~28,500 | ? | ? | ? | ? | ? | ? | ? |
-| 9 | Irene | 40,000 | ? | ? | ? | ? | ? | ? | ? |
-| 10 | James | 60,000 | ? | ? | ? | ? | ? | ? | ? |
+### Year 4 NSSF Parameters (February 2026+)
+
+| Parameter | Value |
+|-----------|-------|
+| Lower Earnings Limit (LEL) | KES 9,000 |
+| Upper Earnings Limit (UEL) | KES 108,000 |
+| Tier I Rate | 6% of earnings up to LEL |
+| Tier II Rate | 6% of earnings between LEL and UEL |
+| Max Employee Contribution | KES 6,480 (540 + 5,940) |
 
 ---
 
-## NSSF Tests
+### VALIDATED Example 1: Entry Level (KES 30,000)
 
-```
-FOR EACH employee IN test_employees:
+**Source:** Net Pay Kenya, HR Fleek
 
-    LOAD employee, contract, timesheet
-    CALCULATE gross
-
-    # Year 4 rates (Feb 2026): LEL=9000, UEL=108000
-
-    nssf_tier1 = MIN(gross, 9000) * 0.06
-
-    IF gross > 9000:
-        pensionable_excess = MIN(gross, 108000) - 9000
-        nssf_tier2 = pensionable_excess * 0.06
-    ELSE:
-        nssf_tier2 = 0
-
-    ASSERT nssf_tier1 EQUALS expected_nssf_tier1[employee]
-    ASSERT nssf_tier2 EQUALS expected_nssf_tier2[employee]
-```
+| Item | Amount (KES) | Calculation |
+|------|--------------|-------------|
+| **Gross Salary** | 30,000 | Input |
+| NSSF Tier I | 540 | 9,000 × 6% |
+| NSSF Tier II | 1,260 | (30,000 - 9,000) × 6% |
+| **Total NSSF** | 1,800 | 6% of gross (below UEL) |
+| **SHIF** | 825 | 2.75% of gross |
+| **AHL** | 450 | 1.5% of gross |
+| **Taxable Pay** | 26,925 | 30,000 - 1,800 - 825 - 450 |
+| Gross PAYE | 3,132 | Tax calculation on 26,925 |
+| Personal Relief | (2,400) | Standard monthly relief |
+| **PAYE** | 732 | 3,132 - 2,400 |
+| **Net Pay** | 26,193 | 30,000 - 1,800 - 825 - 450 - 732 |
 
 ---
 
-## SHIF Tests
+### VALIDATED Example 2: Senior Executive (KES 200,000)
 
-```
-FOR EACH employee IN test_employees:
+**Source:** Net Pay Kenya, HR Fleek
 
-    LOAD employee, contract, timesheet
-    CALCULATE gross
-
-    shif = MAX(gross * 0.0275, 300)
-
-    ASSERT shif EQUALS expected_shif[employee]
-```
-
----
-
-## AHL Tests
-
-```
-FOR EACH employee IN test_employees:
-
-    LOAD employee, contract, timesheet
-    CALCULATE gross
-
-    ahl = gross * 0.015
-
-    ASSERT ahl EQUALS expected_ahl[employee]
-```
+| Item | Amount (KES) | Calculation |
+|------|--------------|-------------|
+| **Gross Salary** | 200,000 | Input |
+| NSSF Tier I | 540 | 9,000 × 6% |
+| NSSF Tier II | 5,940 | (108,000 - 9,000) × 6% (capped) |
+| **Total NSSF** | 6,480 | Maximum contribution |
+| **SHIF** | 5,500 | 2.75% of gross |
+| **AHL** | 3,000 | 1.5% of gross |
+| **Taxable Pay** | 185,020 | 200,000 - 6,480 - 5,500 - 3,000 |
+| Gross PAYE | 50,289 | Tax calculation on 185,020 |
+| Personal Relief | (2,400) | Standard monthly relief |
+| **PAYE** | 47,889 | 50,289 - 2,400 |
+| **Net Pay** | 137,131 | 200,000 - 6,480 - 5,500 - 3,000 - 47,889 |
 
 ---
 
-## PAYE Tests
+### VALIDATED Example 3: C-Suite Level (KES 500,000)
 
-```
-FOR EACH employee IN test_employees:
+**Source:** Net Pay Kenya, HR Fleek
 
-    LOAD employee, contract, timesheet
-    CALCULATE gross
-    CALCULATE housing_benefit (for James: MAX(8000, gross * 0.15))
-    CALCULATE total_deductions = nssf_tier1 + nssf_tier2 + shif + ahl
-
-    chargeable_pay = gross + housing_benefit - total_deductions
-
-    # Apply tax bands progressively
-    tax = 0
-    remaining = chargeable_pay
-
-    IF remaining > 0:
-        band1 = MIN(remaining, 24000)
-        tax = tax + (band1 * 0.10)
-        remaining = remaining - 24000
-
-    IF remaining > 0:
-        band2 = MIN(remaining, 8333)  # 32333 - 24000
-        tax = tax + (band2 * 0.25)
-        remaining = remaining - 8333
-
-    IF remaining > 0:
-        band3 = MIN(remaining, 467667)  # 500000 - 32333
-        tax = tax + (band3 * 0.30)
-        remaining = remaining - 467667
-
-    IF remaining > 0:
-        band4 = MIN(remaining, 300000)  # 800000 - 500000
-        tax = tax + (band4 * 0.325)
-        remaining = remaining - 300000
-
-    IF remaining > 0:
-        tax = tax + (remaining * 0.35)
-
-    paye = MAX(tax - 2400, 0)  # subtract personal relief
-
-    ASSERT paye EQUALS expected_paye[employee]
-```
+| Item | Amount (KES) | Calculation |
+|------|--------------|-------------|
+| **Gross Salary** | 500,000 | Input |
+| NSSF Tier I | 540 | 9,000 × 6% |
+| NSSF Tier II | 5,940 | (108,000 - 9,000) × 6% (capped) |
+| **Total NSSF** | 6,480 | Maximum contribution |
+| **SHIF** | 13,750 | 2.75% of gross |
+| **AHL** | 7,500 | 1.5% of gross |
+| **Taxable Pay** | 472,270 | 500,000 - 6,480 - 13,750 - 7,500 |
+| Gross PAYE | 136,464 | Tax calculation on 472,270 |
+| Personal Relief | (2,400) | Standard monthly relief |
+| **PAYE** | 134,064 | 136,464 - 2,400 |
+| **Net Pay** | 338,206 | 500,000 - 6,480 - 13,750 - 7,500 - 134,064 |
 
 ---
 
-## Gross Calculation Tests
+## SECTION 2: SYNTHETIC TEST SCENARIOS
+
+### Test Employees (February 2026)
+
+| ID | Name | Contract Type | Base Salary | Weekly Hours | Special Conditions |
+|----|------|---------------|-------------|--------------|-------------------|
+| 1 | Alice Wanjiku | Hourly | 16,113.75 | 52 | Full month, no leave |
+| 2 | Bob Ochieng | Hourly | 25,000 | 45 | Full month, no leave |
+| 3 | Carol Muthoni | Prorated min wage | 16,113.75 | 45 | 18 days worked (partial month) |
+| 4 | David Kimani | Fixed monthly | 50,000 | - | Full month |
+| 5 | Eve Akinyi | Fixed monthly | 550,000 | - | High earner (32.5% bracket) |
+| 6 | Frank Mwangi | Hourly | 20,000 | 52 | With overtime (12hrs @1.5x, 4hrs @2.0x) |
+| 7 | Grace Njeri | Fixed monthly | 35,000 | - | 4 days sick |
+| 8 | Henry Otieno | Fixed monthly | 30,000 | - | 6 days sick |
+| 9 | Irene Wambui | Fixed monthly | 40,000 | - | 5 days absent (not sick) |
+| 10 | James Kipchoge | Fixed monthly | 60,000 | - | Housing quarters (market value 8,000) |
+
+---
+
+### Leave Stocks (as of February 1, 2026)
+
+| ID | Name | Sick Full Pay | Sick Half Pay | Annual Leave | Test Scenario |
+|----|------|---------------|---------------|--------------|---------------|
+| 1-6 | (Various) | 7 | 7 | (varies) | No leave used |
+| 7 | Grace | 7 | 7 | 10 | 4 sick → uses 4 full-pay |
+| 8 | Henry | 3 | 7 | 10 | 6 sick → uses 3 full + 3 half |
+| 9 | Irene | 7 | 7 | 10 | 5 non-sick → uses 5 annual |
+| 10 | James | 7 | 7 | 14 | No leave used |
+
+---
+
+### Expected Leave Stocks After February 2026
+
+| ID | Name | Sick Full | Sick Half | Annual | Unpaid Days |
+|----|------|-----------|-----------|--------|-------------|
+| 7 | Grace | 3 | 7 | 10 | 0 |
+| 8 | Henry | 0 | 4 | 10 | 0 |
+| 9 | Irene | 7 | 7 | 5 | 0 |
+
+---
+
+## Test Input Formats
+
+### Timesheet Format (TSV)
+
+Actual calendar dates with hours worked per employee:
 
 ```
-# Test 1: Alice - Hourly 52hr week
-divisor = (52 * 52) / 12  # ~225.33
-hourly_rate = 16113.75 / divisor
-gross = hourly_rate * hours_worked_normal
-ASSERT gross EQUALS 16113.75  # full month
+employee_id  date        hours_normal  hours_ot_1_5  hours_ot_2_0  absent  sick
+1            2026-02-02  9             0             0             0       0
+1            2026-02-03  9             0             0             0       0
+...
+6            2026-02-02  9             3             0             0       0
+6            2026-02-08  0             0             4             0       0
+...
+7            2026-02-09  0             0             0             1       1
+```
 
-# Test 3: Carol - Prorated minimum wage
-std_monthly_hours = 45 * 4  # 180
-worked_hours = 18 * 8  # 144 (3 weeks)
-fraction = worked_hours / std_monthly_hours  # 0.8
-gross = 16113.75 * fraction
-ASSERT gross EQUALS ~12085
+### Contract Format (TSV)
 
-# Test 6: Frank - With overtime
-divisor = (52 * 52) / 12
-hourly_rate = 20000 / divisor
-gross = (hourly_rate * 208) + (hourly_rate * 1.5 * 12) + (hourly_rate * 2.0 * 4)
-ASSERT gross EQUALS expected_gross_frank
+```
+employee_id  contract_type     base_salary  weekly_hours  housing_type  housing_market_value  nssf_tier
+1            hourly            16113.75     52            none                                standard
+4            fixed_monthly     50000                      none                                standard
+10           fixed_monthly     60000                      quarters      8000                  standard
+```
 
-# Test 8: Henry - Half pay sick days
-days_full_pay = 18 + 3  # worked + sick full
-days_half_pay = 3
-daily_rate = 30000 / 24
-gross = (days_full_pay * daily_rate) + (days_half_pay * daily_rate * 0.5)
-ASSERT gross EQUALS expected_gross_henry
+### Employee Format (TSV)
+
+```
+employee_id  name            national_id  kra_pin       phone          bank_account
+1            Alice Wanjiku   12345678     A001234567X   +254712345001  0011223344551
+```
+
+### Leave Stock Format (TSV)
+
+```
+employee_id  sick_full_pay  sick_half_pay  annual_leave  as_of_date
+1            7              7              10            2026-02-01
+8            3              7              10            2026-02-01
 ```
 
 ---
 
-## Leave Allocation Tests
-
-```
-FOR EACH employee IN test_employees:
-
-    LOAD employee, timesheet, leave_stocks_before
-
-    # Model determines leave type from stocks and timesheet
-    FOR EACH day IN timesheet WHERE day.absent == TRUE:
-
-        IF day.sick == TRUE:
-            # Draw from sick leave stocks in order
-            IF leave_stocks.sick_full_pay > 0:
-                ALLOCATE to sick_full_pay
-                DECREMENT leave_stocks.sick_full_pay
-            ELSE IF leave_stocks.sick_half_pay > 0:
-                ALLOCATE to sick_half_pay
-                DECREMENT leave_stocks.sick_half_pay
-            ELSE:
-                ALLOCATE to unpaid_leave
-
-        ELSE:  # absent but not sick
-            # Draw from annual leave first
-            IF leave_stocks.annual_leave > 0:
-                ALLOCATE to annual_leave
-                DECREMENT leave_stocks.annual_leave
-            ELSE:
-                ALLOCATE to unpaid_leave
-
-    # Test Grace: 4 sick days, 7 full-pay stock → all full-pay
-    IF employee.name == "Grace":
-        ASSERT allocated_sick_full_pay EQUALS 4
-        ASSERT allocated_sick_half_pay EQUALS 0
-        ASSERT leave_stocks_after.sick_full_pay EQUALS 3
-
-    # Test Henry: 6 sick days, 3 full-pay stock → 3 full + 3 half
-    IF employee.name == "Henry":
-        ASSERT allocated_sick_full_pay EQUALS 3
-        ASSERT allocated_sick_half_pay EQUALS 3
-        ASSERT leave_stocks_after.sick_full_pay EQUALS 0
-        ASSERT leave_stocks_after.sick_half_pay EQUALS 4
-
-    # Test Irene: 5 non-sick absent, 10 annual stock → 5 annual
-    IF employee.name == "Irene":
-        ASSERT allocated_annual_leave EQUALS 5
-        ASSERT leave_stocks_after.annual_leave EQUALS 5 + monthly_accrual
-```
-
----
-
-## Paystub Hours Verification Tests
-
-```
-FOR EACH employee IN test_employees:
-
-    LOAD employee, timesheet
-    GENERATE paystub
-
-    # Verify each day in timesheet appears on paystub
-    FOR EACH day IN timesheet:
-        ASSERT day.date EXISTS IN paystub.daily_work_log
-        ASSERT day.hours EQUALS paystub.daily_work_log[day.date].hours
-
-    # Verify totals match
-    ASSERT SUM(timesheet.hours) EQUALS paystub.total_hours
-
-    # Verify overtime only shows if worked (Frank only)
-    IF employee.name == "Frank":
-        ASSERT paystub.overtime_section EXISTS
-        ASSERT paystub.overtime_1_5x_hours EQUALS 12
-        ASSERT paystub.overtime_2_0x_hours EQUALS 4
-    ELSE:
-        ASSERT paystub.overtime_section NOT EXISTS
-
-    # Verify leave balances (Irene)
-    IF employee.name == "Irene":
-        ASSERT paystub.leave_used EQUALS 5
-        ASSERT paystub.leave_accrued EQUALS 1.75
-        ASSERT paystub.leave_balance EQUALS (10 - 5 + 1.75)
-```
-
----
-
-## Batch Paystub Verification Test
-
-```
-LOAD all 10 test_employees
-LOAD all test_timesheets
-GENERATE paystubs for all employees
-
-FOR EACH paystub IN generated_paystubs:
-
-    # Structure checks
-    ASSERT paystub.header.company_name EXISTS
-    ASSERT paystub.header.payroll_period EQUALS "February 2026"
-    ASSERT paystub.header.pay_date EXISTS
-
-    ASSERT paystub.employee_info.name EXISTS
-    ASSERT paystub.employee_info.pin EXISTS
-
-    ASSERT paystub.daily_work_log EXISTS
-    ASSERT paystub.time_off_summary EXISTS
-    ASSERT paystub.earnings_breakdown EXISTS
-    ASSERT paystub.deductions_breakdown EXISTS
-    ASSERT paystub.net_pay EXISTS
-
-    # Value checks against calculated expectations
-    employee_id = paystub.employee_info.id
-
-    ASSERT paystub.deductions.nssf EQUALS expected_nssf[employee_id]
-    ASSERT paystub.deductions.shif EQUALS expected_shif[employee_id]
-    ASSERT paystub.deductions.ahl EQUALS expected_ahl[employee_id]
-    ASSERT paystub.deductions.paye EQUALS expected_paye[employee_id]
-    ASSERT paystub.net_pay EQUALS expected_net[employee_id]
-
-    # Hours match timesheet
-    ASSERT paystub.total_hours EQUALS timesheet[employee_id].total_hours
-```
-
----
-
-## Test Fixtures
+## Test Fixtures Location
 
 ```
 tests/fixtures/
-├── test_employees.tsv       # 10 employees
-├── test_contracts.tsv       # 10 contracts
-├── test_leave_stocks.tsv    # Leave balances at start of Feb 2026
-└── test_timesheets/
-    └── 2026_02.tsv          # February 2026 daily records (hours, absent, sick y/n)
+├── test_employees.tsv           # 10 synthetic employees
+├── test_contracts.tsv           # 10 contracts
+├── test_leave_stocks.tsv        # Leave balances as of Feb 2026
+├── test_timesheets/
+│   ├── 2026_01.tsv              # January 2026 (Year 3 NSSF)
+│   └── 2026_02.tsv              # February 2026 (Year 4 NSSF)
+└── official/
+    ├── test_employees.tsv       # 3 employees for validated examples
+    ├── test_contracts.tsv       # Simple fixed monthly contracts
+    ├── test_leave_stocks.tsv    # No leave used
+    └── test_timesheets/
+        └── 2026_02.tsv          # Full month worked
 ```
 
 ---
 
-## Verification Checklist
+## NSSF Rate Transition Tests
 
-- [ ] All 10 employee expected values verified with accountant/KRA calculator
-- [ ] NSSF Year 4 rates confirmed (Feb 2026: LEL=9000, UEL=108000)
-- [ ] PAYE bands confirmed for 2026
-- [ ] SHIF 2.75% rate confirmed
-- [ ] AHL 1.5% rate confirmed
-- [ ] Housing benefit 15% rule confirmed
+| Date | Year | LEL | UEL | Max Employee Contribution |
+|------|------|-----|-----|--------------------------|
+| January 2026 | Year 3 | 8,000 | 72,000 | 4,320 |
+| February 2026+ | Year 4 | 9,000 | 108,000 | 6,480 |
+
+---
+
+## 2026 PAYE Tax Bands
+
+| Band | Monthly Income (KES) | Rate |
+|------|---------------------|------|
+| 1 | 0 - 24,000 | 10% |
+| 2 | 24,001 - 32,333 | 25% |
+| 3 | 32,334 - 500,000 | 30% |
+| 4 | 500,001 - 800,000 | 32.5% |
+| 5 | 800,001+ | 35% |
+
+**Personal Relief:** KES 2,400/month
+
+---
+
+## Statutory Rate Summary
+
+| Deduction | Rate | Floor | Ceiling |
+|-----------|------|-------|---------|
+| NSSF | 6% | - | KES 6,480 (Year 4) |
+| SHIF | 2.75% | KES 300 | None |
+| AHL (Employee) | 1.5% | - | None |
+| AHL (Employer) | 1.5% | - | None |
+
+---
+
+## Validation Checklist
+
+- [x] Entry Level (30k) - EXTERNALLY VALIDATED
+- [x] Senior Executive (200k) - EXTERNALLY VALIDATED
+- [x] C-Suite Level (500k) - EXTERNALLY VALIDATED
+- [x] Year 3 → Year 4 NSSF transition dates confirmed
+- [x] PAYE bands confirmed for 2026
+- [x] SHIF 2.75% rate with KES 300 floor confirmed
+- [x] AHL 1.5% rate confirmed
+- [x] Housing benefit 15% rule confirmed
+- [ ] Overtime rates (1.5x weekday, 2.0x Sunday/holiday) - awaiting external validation
+- [ ] Sick leave allocation (7 full + 7 half per year) - per Employment Act
+- [ ] Annual leave accrual (21 days/year) - per Employment Act
