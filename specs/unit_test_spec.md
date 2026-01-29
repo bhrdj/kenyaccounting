@@ -23,7 +23,7 @@
 
 ## Leave Stocks (balances at start of Feb 2026)
 
-The model determines leave type from stocks. Input timesheet only says "absent" and "sick yes/no".
+User explicitly specifies leave type and hours in timesheet. System validates against balances.
 
 | # | Name | Sick Leave (full pay) | Sick Leave (half pay) | Annual Leave | Notes |
 |---|------|----------------------|----------------------|--------------|-------|
@@ -33,9 +33,9 @@ The model determines leave type from stocks. Input timesheet only says "absent" 
 | 4 | David | 7 | 7 | 15 | Won't use any |
 | 5 | Eve | 7 | 7 | 21 | Won't use any |
 | 6 | Frank | 7 | 7 | 5 | Won't use any |
-| 7 | Grace | 7 | 7 | 10 | 4 sick days → uses 4 full-pay sick |
-| 8 | Henry | 3 | 7 | 10 | 6 sick days → uses 3 full-pay + 3 half-pay |
-| 9 | Irene | 7 | 7 | 10 | 5 non-sick absent → uses 5 annual leave |
+| 7 | Grace | 7 | 7 | 10 | 4 sick days (32 hrs) → timesheet has hours_sick_full |
+| 8 | Henry | 3 | 7 | 10 | 6 sick days (48 hrs) → 24 hrs sick_full + 24 hrs sick_half |
+| 9 | Irene | 7 | 7 | 10 | 5 days annual leave (40 hrs) → timesheet has hours_annual |
 | 10 | James | 7 | 7 | 14 | Won't use any |
 
 ---
@@ -189,11 +189,12 @@ hourly_rate = 20000 / divisor
 gross = (hourly_rate * 208) + (hourly_rate * 1.5 * 12) + (hourly_rate * 2.0 * 4)
 ASSERT gross EQUALS expected_gross_frank
 
-# Test 8: Henry - Half pay sick days
-days_full_pay = 18 + 3  # worked + sick full
-days_half_pay = 3
-daily_rate = 30000 / 24
-gross = (days_full_pay * daily_rate) + (days_half_pay * daily_rate * 0.5)
+# Test 8: Henry - Half pay sick days (fixed monthly)
+# 14 work days + 3 sick full + 3 sick half = 20 day period
+# Sick half pay = deduction of 50% for those hours
+hourly_rate = 30000 / (45 * 52 / 12)  # ~153.85
+sick_half_deduction = hourly_rate * 0.5 * 24  # 3 days @ 8hrs
+gross = 30000 - sick_half_deduction
 ASSERT gross EQUALS expected_gross_henry
 ```
 
@@ -204,47 +205,48 @@ ASSERT gross EQUALS expected_gross_henry
 ```
 FOR EACH employee IN test_employees:
 
-    LOAD employee, timesheet, leave_stocks_before
+    LOAD employee, contract, timesheet, leave_stocks_before
 
-    # Model determines leave type from stocks and timesheet
-    FOR EACH day IN timesheet WHERE day.absent == TRUE:
+    # Sum explicit leave hours from timesheet
+    sick_full_hours = SUM(timesheet.hours_sick_full)
+    sick_half_hours = SUM(timesheet.hours_sick_half)
+    annual_hours = SUM(timesheet.hours_annual)
+    unpaid_hours = SUM(timesheet.hours_unpaid)
 
-        IF day.sick == TRUE:
-            # Draw from sick leave stocks in order
-            IF leave_stocks.sick_full_pay > 0:
-                ALLOCATE to sick_full_pay
-                DECREMENT leave_stocks.sick_full_pay
-            ELSE IF leave_stocks.sick_half_pay > 0:
-                ALLOCATE to sick_half_pay
-                DECREMENT leave_stocks.sick_half_pay
-            ELSE:
-                ALLOCATE to unpaid_leave
+    # Convert hours to days using contract.standard_workday_hours
+    sick_full_days = sick_full_hours / contract.standard_workday_hours
+    sick_half_days = sick_half_hours / contract.standard_workday_hours
+    annual_days = annual_hours / contract.standard_workday_hours
 
-        ELSE:  # absent but not sick
-            # Draw from annual leave first
-            IF leave_stocks.annual_leave > 0:
-                ALLOCATE to annual_leave
-                DECREMENT leave_stocks.annual_leave
-            ELSE:
-                ALLOCATE to unpaid_leave
+    # Validate against balances
+    ASSERT sick_full_days <= leave_stocks_before.sick_full_pay
+    ASSERT sick_half_days <= leave_stocks_before.sick_half_pay
+    ASSERT annual_days <= leave_stocks_before.annual_leave
 
-    # Test Grace: 4 sick days, 7 full-pay stock → all full-pay
+    # Test Grace: 4 sick days (32 hrs @ 8hr workday), 7 full-pay stock
     IF employee.name == "Grace":
-        ASSERT allocated_sick_full_pay EQUALS 4
-        ASSERT allocated_sick_half_pay EQUALS 0
+        ASSERT sick_full_hours EQUALS 32
+        ASSERT sick_full_days EQUALS 4
         ASSERT leave_stocks_after.sick_full_pay EQUALS 3
 
-    # Test Henry: 6 sick days, 3 full-pay stock → 3 full + 3 half
+    # Test Henry: 6 sick days (48 hrs), only 3 full-pay in stock
+    # Timesheet explicitly allocates: 24 hrs sick_full + 24 hrs sick_half
     IF employee.name == "Henry":
-        ASSERT allocated_sick_full_pay EQUALS 3
-        ASSERT allocated_sick_half_pay EQUALS 3
+        ASSERT sick_full_hours EQUALS 24  # 3 days
+        ASSERT sick_half_hours EQUALS 24  # 3 days
         ASSERT leave_stocks_after.sick_full_pay EQUALS 0
         ASSERT leave_stocks_after.sick_half_pay EQUALS 4
 
-    # Test Irene: 5 non-sick absent, 10 annual stock → 5 annual
+    # Test Irene: 5 days annual leave (40 hrs @ 8hr workday)
     IF employee.name == "Irene":
-        ASSERT allocated_annual_leave EQUALS 5
+        ASSERT annual_hours EQUALS 40
+        ASSERT annual_days EQUALS 5
         ASSERT leave_stocks_after.annual_leave EQUALS 5 + monthly_accrual
+
+# Negative test: insufficient balance should raise error
+TEST insufficient_leave_balance:
+    # Create timesheet with 10 days sick_full (80 hrs) but only 7 days in stock
+    EXPECT InsufficientLeaveError when processing
 ```
 
 ---
@@ -325,10 +327,10 @@ FOR EACH paystub IN generated_paystubs:
 ```
 tests/fixtures/
 ├── test_employees.tsv       # 10 employees
-├── test_contracts.tsv       # 10 contracts
+├── test_contracts.tsv       # 10 contracts (includes standard_workday_hours)
 ├── test_leave_stocks.tsv    # Leave balances at start of Feb 2026
 └── test_timesheets/
-    └── 2026_02.tsv          # February 2026 daily records (hours, absent, sick y/n)
+    └── 2026_02.tsv          # February 2026 daily records (explicit leave hours by type)
 ```
 
 ---

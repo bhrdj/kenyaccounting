@@ -7,10 +7,12 @@
 │                              INPUT DATA                                      │
 ├──────────────────┬──────────────────┬───────────────────┬───────────────────┤
 │  Employee Master │    Contract      │   Leave Stocks    │    Timesheet      │
-│  - Name, PIN     │  - Pay basis     │  - Sick (full)    │  - Hours/day      │
-│  - Base salary   │  - Weekly hours  │  - Sick (half)    │  - Absent y/n     │
-│  - Housing allow │  - Housing type  │  - Annual leave   │  - Sick y/n       │
-│    (if cash)     │  - Housing value │                   │  - OT hours       │
+│  - Name, PIN     │  - Pay basis     │  - Sick (full)    │  - hours_normal   │
+│  - Base salary   │  - Weekly hours  │  - Sick (half)    │  - hours_ot_1_5   │
+│  - Housing allow │  - Housing type  │  - Annual leave   │  - hours_ot_2_0   │
+│    (if cash)     │  - Housing value │                   │  - hours_sick_*   │
+│                  │  - Workday hours │                   │  - hours_annual   │
+│                  │                  │                   │  - hours_unpaid   │
 └────────┬─────────┴────────┬─────────┴─────────┬─────────┴─────────┬─────────┘
          │                  │                   │                   │
          ▼                  ▼                   ▼                   ▼
@@ -45,62 +47,47 @@
 
 ---
 
-## 1. Leave Allocation Engine
+## 1. Leave Validation Engine
 
-Determines how absent days are categorized and paid.
+Validates explicit leave hours in timesheet against available balances.
 
 ```
-                    ┌─────────────────┐
-                    │   For each      │
-                    │   absent day    │
-                    └────────┬────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                    For each leave type                          │
+│              (sick_full, sick_half, annual)                     │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Sum hours from timesheet for this leave type                   │
+│  Convert to days: hours / contract.standard_workday_hours       │
+└────────────────────────────┬────────────────────────────────────┘
                              │
                              ▼
                     ┌─────────────────┐
-                    │  Consolidated   │
-                    │  salary?        │
+                    │  days_used <=   │
+                    │  stock balance? │
                     └────────┬────────┘
                              │
               ┌──────────────┴──────────────┐
               │ YES                         │ NO
               ▼                             ▼
      ┌─────────────────┐           ┌─────────────────┐
-     │ Is this         │           │  Was employee   │
-     │ rostered        │           │     sick?       │
-     │ off-time?       │           └────────┬────────┘
-     └────────┬────────┘                    │
-              │                  ┌──────────┴──────────┐
-       ┌──────┴──────┐           │ YES                 │ NO
-       │ YES         │ NO        ▼                     ▼
-       ▼             ▼    ┌─────────────┐      ┌─────────────┐
-  ┌─────────┐  ┌─────────┐│ Sick full   │      │ Annual leave│
-  │ No leave│  │ Sick    ││ stock > 0?  │      │ stock > 0?  │
-  │ tracked │  │ during  │└──────┬──────┘      └──────┬──────┘
-  │ (built  │  │ duty:   │       │                    │
-  │ into    │  │ process │  ┌────┴────┐          ┌────┴────┐
-  │ roster) │  │ as sick │  │YES    NO│          │YES    NO│
-  └─────────┘  └─────────┘  ▼         ▼          ▼         ▼
-                       ┌──────┐ ┌─────────┐ ┌──────┐ ┌──────┐
-                       │SICK  │ │Half     │ │ANNUAL│ │UNPAID│
-                       │FULL  │ │stock>0? │ │LEAVE │ │LEAVE │
-                       └──────┘ └────┬────┘ └──────┘ └──────┘
-                                     │
-                                ┌────┴────┐
-                                │YES    NO│
-                                ▼         ▼
-                           ┌──────┐ ┌──────┐
-                           │SICK  │ │UNPAID│
-                           │HALF  │ │LEAVE │
-                           └──────┘ └──────┘
+     │ Deduct from     │           │ RAISE ERROR     │
+     │ stock balance   │           │ Insufficient    │
+     │                 │           │ leave balance   │
+     └─────────────────┘           └─────────────────┘
 ```
+
+**Key change from previous design:** User explicitly specifies leave type and hours in timesheet. System validates rather than determines allocation. This allows user control over which leave type to use (e.g., using annual leave when sick stock is depleted).
 
 **Consolidated salary employees:** Annual leave is built into the roster. Rostered off-time (e.g., one week off per month) is not counted as leave usage and no annual leave stock is decremented. Sick leave is only tracked when illness occurs during scheduled active duty periods.
 
 **Outputs:**
-- Days at full pay (worked + sick full + annual leave)
-- Days at half pay (sick half)
-- Days unpaid
-- Updated leave stock balances (annual leave not tracked for consolidated salary)
+- Hours at full pay (worked + sick_full + annual)
+- Hours at half pay (sick_half)
+- Hours unpaid
+- Updated leave stock balances
 
 ---
 
