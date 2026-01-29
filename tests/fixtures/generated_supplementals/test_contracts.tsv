@@ -11,10 +11,17 @@ employee_id	contract_type	base_salary	weekly_hours	standard_workday_hours	housin
 10	fixed_monthly	60000.00	45	8.00	quarters	8000.00	standard	2024-03-01		active
 11	fixed_monthly	200000.00	45	8.00	none		standard	2024-01-01		active
 12	fixed_monthly	500000.00	45	8.00	none		standard	2023-06-01		active
-13	fixed_monthly	10000.00	45	8.00	none		standard	2025-01-01		active
-14	fixed_monthly	15000.00	45	8.00	none		standard	2025-01-01		active
-15	fixed_monthly	20000.00	45	8.00	none		standard	2025-01-01		active
-16	fixed_monthly	25000.00	45	8.00	none		standard	2025-01-01		active
-17	fixed_monthly	30000.00	45	8.00	none		standard	2025-01-01		active
-18	fixed_monthly	50000.00	45	8.00	none		standard	2025-01-01		active
-19	fixed_monthly	80000.00	45	8.00	none		standard	2025-01-01		active
+13	fixed_monthly	10000.00	52	9.00	none		standard	2025-01-01		active
+14	fixed_monthly	15000.00	52	9.00	none		standard	2025-01-01		active
+15	fixed_monthly	20000.00	52	9.00	none		standard	2025-01-01		active
+16	fixed_monthly	25000.00	52	9.00	none		standard	2025-01-01		active
+17	fixed_monthly	30000.00	52	9.00	none		standard	2025-01-01		active
+18	fixed_monthly	50000.00	52	9.00	none		standard	2025-01-01		active
+19	fixed_monthly	80000.00	52	9.00	none		standard	2025-01-01		active
+20	fixed_monthly	22000.00	52	9.00	none		standard	2025-01-01		active
+21	fixed_monthly	28000.00	52	9.00	none		standard	2025-01-01		active
+22	fixed_monthly	45000.00	52	9.00	none		standard	2025-01-01		active
+23	fixed_monthly	18000.00	52	9.00	none		standard	2025-01-01		active
+24	fixed_monthly	55000.00	52	9.00	none		standard	2025-01-01		active
+25	fixed_monthly	32000.00	52	9.00	none		standard	2025-01-01		active
+26	fixed_monthly	70000.00	52	9.00	none		standard	2025-01-01		active

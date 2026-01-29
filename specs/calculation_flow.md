@@ -10,7 +10,7 @@
 │  - Name, PIN     │  - Pay basis     │  - Sick (full)    │  - hours_normal   │
 │  - Base salary   │  - Weekly hours  │  - Sick (half)    │  - hours_ot_1_5   │
 │  - Housing allow │  - Housing type  │  - Annual leave   │  - hours_ot_2_0   │
-│    (if cash)     │  - Housing value │                   │  - hours_sick_*   │
+│    (if cash)     │  - Housing value │                   │  - hours_sick     │
 │                  │  - Workday hours │                   │  - hours_annual   │
 │                  │                  │                   │  - hours_unpaid   │
 └────────┬─────────┴────────┬─────────┴─────────┬─────────┴─────────┬─────────┘
@@ -47,46 +47,54 @@
 
 ---
 
-## 1. Leave Validation Engine
+## 1. Leave Allocation Engine
 
-Validates explicit leave hours in timesheet against available balances.
+Allocates leave hours from timesheet against available stock balances.
+Timesheet records intent (sick, annual, unpaid). Engine determines attribution.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    For each leave type                          │
-│              (sick_full, sick_half, annual)                     │
+│           Sum hours_sick from timesheet                          │
+│           Convert to days: hours / standard_workday_hours        │
 └────────────────────────────┬────────────────────────────────────┘
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  Sum hours from timesheet for this leave type                   │
-│  Convert to days: hours / contract.standard_workday_hours       │
+│  Allocate sick days against stocks (in order):                   │
+│                                                                  │
+│  1. sick_full stock → use up to available days                   │
+│  2. sick_half stock → use up to available days                   │
+│  3. Remaining sick days overflow → annual leave stock             │
+│  4. If annual also exhausted → unpaid                            │
 └────────────────────────────┬────────────────────────────────────┘
                              │
                              ▼
-                    ┌─────────────────┐
-                    │  days_used <=   │
-                    │  stock balance? │
-                    └────────┬────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  Allocate hours_annual from timesheet:                           │
+│                                                                  │
+│  1. annual leave stock → use up to available days                │
+│  2. Remaining annual days overflow → unpaid                      │
+└────────────────────────────┬────────────────────────────────────┘
                              │
-              ┌──────────────┴──────────────┐
-              │ YES                         │ NO
-              ▼                             ▼
-     ┌─────────────────┐           ┌─────────────────┐
-     │ Deduct from     │           │ RAISE ERROR     │
-     │ stock balance   │           │ Insufficient    │
-     │                 │           │ leave balance   │
-     └─────────────────┘           └─────────────────┘
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Return LeaveAllocation:                                         │
+│  - sick_full_pay_hours (for gross calc: full rate)               │
+│  - sick_half_pay_hours (for gross calc: half rate)               │
+│  - annual_leave_hours  (for gross calc: full rate)               │
+│  - unpaid_hours        (for gross calc: zero rate)               │
+│  - updated_stock       (balances after allocation)               │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-**Key change from previous design:** User explicitly specifies leave type and hours in timesheet. System validates rather than determines allocation. This allows user control over which leave type to use (e.g., using annual leave when sick stock is depleted).
+**Key design:** Timesheet records only intent (sick/annual/unpaid). Engine handles all stock attribution, including cascade overflow (sick→annual→unpaid). No errors are raised for insufficient balance — the system overflows gracefully.
 
 **Consolidated salary employees:** Annual leave is built into the roster. Rostered off-time (e.g., one week off per month) is not counted as leave usage and no annual leave stock is decremented. Sick leave is only tracked when illness occurs during scheduled active duty periods.
 
 **Outputs:**
-- Hours at full pay (worked + sick_full + annual)
-- Hours at half pay (sick_half)
-- Hours unpaid
+- Hours at full pay (worked + engine-allocated sick_full + annual)
+- Hours at half pay (engine-allocated sick_half)
+- Hours unpaid (explicit + overflow)
 - Updated leave stock balances
 
 ---
@@ -347,7 +355,9 @@ Employee Master ─────┐
   (+ cash housing    │
    allowance)        │
                      │
-Contract ────────────┼──────▶ Leave Allocation ──▶ Days by pay type
+Contract ────────────┼──────▶ Leave Allocation ──▶ Hours by pay type
+                     │         (sick→full→half     (sick_full, sick_half,
+                     │          →annual→unpaid)     annual, unpaid)
                      │              │
 Leave Stocks ────────┤              │
                      │              ▼

@@ -28,7 +28,12 @@ KenyAccounting/
 │   ├── calculators.py      # Calculation logic
 │   └── outputs.py          # File generators
 ├── tests/
-│   ├── fixtures/           # Test TSV files
+│   ├── fixtures/
+│   │   ├── test_employees.tsv
+│   │   ├── test_contracts.tsv
+│   │   ├── test_leave_stocks.tsv
+│   │   ├── test_timesheets/         # Monthly timesheet TSVs
+│   │   └── test_weekly_schedules/   # Per-week schedule TSVs
 │   └── test_payroll.py     # pytest tests
 ├── data/                   # User's actual data (gitignored)
 └── app.py                  # Streamlit UI (later)
@@ -75,16 +80,27 @@ TimesheetDay
     hours_normal: Decimal       # regular hours worked
     hours_ot_1_5: Decimal       # overtime at 1.5x (weekday)
     hours_ot_2_0: Decimal       # overtime at 2.0x (Sunday/holiday)
-    hours_sick_full: Decimal    # sick leave hours at full pay
-    hours_sick_half: Decimal    # sick leave hours at half pay
-    hours_annual: Decimal       # annual leave hours
-    hours_unpaid: Decimal       # unpaid leave hours
+    hours_sick: Decimal         # sick leave hours (engine allocates full/half/overflow)
+    hours_annual: Decimal       # annual leave hours (engine handles overflow to unpaid)
+    hours_unpaid: Decimal       # explicit unpaid leave hours
     is_public_holiday: bool     # true if date is a public holiday
+
+WeeklySchedule
+    employee_id: int
+    week_start: date            # Monday of the week
+    mon: Decimal                # scheduled hours for each day
+    tue: Decimal
+    wed: Decimal
+    thu: Decimal
+    fri: Decimal
+    sat: Decimal
 ```
 
 Notes on timesheet:
-- User explicitly specifies leave type and hours
-- System validates against LeaveStock balances before processing
+- Timesheet records intent (sick, annual, unpaid). Engine handles stock attribution.
+- `hours_sick`: engine allocates against sick_full stock first, then sick_half, then overflows to annual leave
+- `hours_annual`: engine allocates against annual leave stock, overflows to unpaid
+- `hours_unpaid`: explicit unpaid leave, no stock needed
 - If `is_public_holiday=true` and `hours_normal > 0`, warn that these should be `hours_ot_2_0`
 - Leave hours are converted to days via `contract.standard_workday_hours` for stock deduction
 
@@ -168,7 +184,7 @@ GrossCalculator
     calculate() -> GrossBreakdown
         # Routes to appropriate method based on contract_type
 
-    _calc_hourly() -> GrossBreakdown
+    _calc_hourly(leave_alloc: LeaveAllocation) -> GrossBreakdown
         divisor = (weekly_hours * 52) / 12
         hourly_rate = base_salary / divisor
 
@@ -177,52 +193,80 @@ GrossCalculator
         ot_1_5 = hourly_rate * 1.5 * sum(hours_ot_1_5)
         ot_2_0 = hourly_rate * 2.0 * sum(hours_ot_2_0)
 
-        # Leave hours
-        sick_full_pay = hourly_rate * sum(hours_sick_full)
-        sick_half_pay = hourly_rate * 0.5 * sum(hours_sick_half)
-        annual_pay = hourly_rate * sum(hours_annual)
-        # hours_unpaid = 0 (no pay)
+        # Leave hours (from engine allocation, not raw timesheet)
+        sick_full_pay = hourly_rate * leave_alloc.sick_full_pay_hours
+        sick_half_pay = hourly_rate * 0.5 * leave_alloc.sick_half_pay_hours
+        annual_pay = hourly_rate * leave_alloc.annual_leave_hours
+        # unpaid = 0 (no pay)
 
         total = base_pay + ot_1_5 + ot_2_0 + sick_full_pay + sick_half_pay + annual_pay
 
-    _calc_fixed_monthly() -> GrossBreakdown
+    _calc_fixed_monthly(leave_alloc: LeaveAllocation) -> GrossBreakdown
         hourly_rate = base_salary / (weekly_hours * 52 / 12)
 
-        # Leave adjustments
-        sick_half_deduction = hourly_rate * 0.5 * sum(hours_sick_half)  # half pay = full minus half
-        unpaid_deduction = hourly_rate * sum(hours_unpaid)
+        # Leave adjustments (engine determines which sick hours are half pay)
+        sick_half_deduction = hourly_rate * 0.5 * leave_alloc.sick_half_pay_hours
+        unpaid_deduction = hourly_rate * (leave_alloc.unpaid_hours + sum(hours_unpaid))
 
         total = base_salary - sick_half_deduction - unpaid_deduction
 
-    _calc_prorated_min_wage() -> GrossBreakdown
+    _calc_prorated_min_wage(leave_alloc: LeaveAllocation) -> GrossBreakdown
         std_monthly_hours = weekly_hours * 52 / 12
-        paid_hours = sum(hours_normal + hours_ot_1_5 + hours_ot_2_0
-                        + hours_sick_full + hours_sick_half*0.5 + hours_annual)
+        paid_hours = sum(hours_normal + hours_ot_1_5 + hours_ot_2_0)
+                     + leave_alloc.sick_full_pay_hours
+                     + leave_alloc.sick_half_pay_hours * 0.5
+                     + leave_alloc.annual_leave_hours
         fraction = paid_hours / std_monthly_hours
         base_pay = base_salary * fraction
 ```
 
 ### LeaveCalculator
 
+Engine-driven allocation: timesheet says "sick" or "annual", engine determines
+which stock categories to draw from and handles overflow.
+
 ```
 LeaveCalculator
     __init__(timesheet_days: list[TimesheetDay], leave_stock: LeaveStock, contract: Contract)
 
-    validate_and_allocate() -> LeaveAllocation
-        # Sum leave hours by type from timesheet
-        # Convert hours to days via contract.standard_workday_hours
-        # Validate each type against leave_stock balances
-        # If any type exceeds balance: raise error with details
-        # Return allocation and updated stock
+    allocate() -> LeaveAllocation
+        sick_hours = sum(day.hours_sick for day in timesheet_days)
+        annual_hours = sum(day.hours_annual for day in timesheet_days)
+        unpaid_hours = sum(day.hours_unpaid for day in timesheet_days)
+        wdh = contract.standard_workday_hours
 
-    _validate_sick_full(hours: Decimal) -> None
-        days_used = hours / contract.standard_workday_hours
-        if days_used > leave_stock.sick_full_pay:
-            raise InsufficientLeaveError(
-                f"Sick full pay: requested {days_used} days but only {leave_stock.sick_full_pay} available"
-            )
+        # 1. Allocate sick hours: full pay first, then half pay, then overflow
+        sick_days = sick_hours / wdh
+        sick_full_days_used = min(sick_days, leave_stock.sick_full_pay)
+        remaining_sick = sick_days - sick_full_days_used
+        sick_half_days_used = min(remaining_sick, leave_stock.sick_half_pay)
+        sick_overflow_days = remaining_sick - sick_half_days_used
 
-    # Similar for sick_half, annual_leave
+        # 2. Allocate annual hours + any sick overflow
+        annual_days = annual_hours / wdh
+        total_annual_needed = annual_days + sick_overflow_days
+        annual_days_used = min(total_annual_needed, leave_stock.annual_leave)
+        annual_overflow_days = total_annual_needed - annual_days_used
+
+        # 3. Any remaining overflow becomes unpaid
+        total_unpaid_hours = (unpaid_hours + annual_overflow_days * wdh)
+
+        # 4. Convert back to hours for gross calculation
+        sick_full_pay_hours = sick_full_days_used * wdh
+        sick_half_pay_hours = sick_half_days_used * wdh
+
+        # 5. Update leave stocks
+        updated_stock = LeaveStock(
+            sick_full_pay = leave_stock.sick_full_pay - sick_full_days_used,
+            sick_half_pay = leave_stock.sick_half_pay - sick_half_days_used,
+            annual_leave = leave_stock.annual_leave - annual_days_used,
+        )
+
+        return LeaveAllocation(
+            sick_full_pay_hours, sick_half_pay_hours,
+            annual_days_used * wdh, total_unpaid_hours,
+            updated_stock
+        )
 ```
 
 ### DeductionCalculator
@@ -294,13 +338,13 @@ PayrollEngine
     process(employee, contract, timesheet_days, leave_stock) -> PaySlip
         rates = StatutoryRates(payroll_date)
 
-        # 1. Validate leave hours against balances
+        # 1. Allocate leave hours against stocks (engine determines full/half/overflow)
         leave_calc = LeaveCalculator(timesheet_days, leave_stock, contract)
-        leave = leave_calc.validate_and_allocate()  # raises if insufficient balance
+        leave = leave_calc.allocate()
 
-        # 2. Calculate gross
+        # 2. Calculate gross (uses leave allocation for sick full/half split)
         gross_calc = GrossCalculator(contract, timesheet_days)
-        gross = gross_calc.calculate()
+        gross = gross_calc.calculate(leave)
 
         # 3. Add housing benefit
         housing_calc = HousingBenefitCalculator(contract, gross.total_gross)
@@ -382,6 +426,9 @@ load_leave_stocks(path) -> dict[int, LeaveStock]
 
 load_timesheet(path) -> dict[int, list[TimesheetDay]]
     # Keyed by employee_id, value is list of days
+
+load_weekly_schedules(path) -> dict[int, list[WeeklySchedule]]
+    # Keyed by employee_id, value is list of weekly schedules
 ```
 
 ---
@@ -391,8 +438,8 @@ load_timesheet(path) -> dict[int, list[TimesheetDay]]
 ```
 For each employee:
     1. Load employee, contract, leave_stock, timesheet_days
-    2. LeaveCalculator: validate explicit leave hours against balances
-    3. GrossCalculator: timesheet hours (work + leave) + contract -> gross breakdown
+    2. LeaveCalculator: allocate sick/annual hours against stocks (full→half→overflow)
+    3. GrossCalculator: timesheet hours + leave allocation -> gross breakdown
     4. HousingBenefitCalculator: add taxable housing value
     5. DeductionCalculator: gross -> NSSF, SHIF, AHL
     6. Chargeable = Gross + Housing - Deductions
