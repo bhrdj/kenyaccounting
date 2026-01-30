@@ -1,0 +1,6 @@
+# Backgrounder Additions
+
+#### Consolidated Salary
+A consolidated salary is a compensation structure where an employee receives a fixed gross amount for each calendar month, paying for the month as a whole unit rather than for individual days or hours worked. Under this model, the salary compensates the employee for fulfilling the entire scope of their monthly engagement, which is understood to include both their active duty periods and their scheduled rest periods. This means the paycheck remains constant every month, regardless of the specific split between working days and off days, provided the employee adheres to the agreed roster.
+
+In practice, for an employee working three weeks with one week off, this structure implies that statutory annual leave is "built-in" and consumed during the paid rostered week off, as this fully paid rest period exceeds the minimum legal requirement for vacation days. However, sick leave is understood differently; because illness is unpredictable, it remains a separate statutory entitlement that is utilized only if health issues prevent the employee from working during their scheduled active duty weeks, rather than being counted against their rostered rest.

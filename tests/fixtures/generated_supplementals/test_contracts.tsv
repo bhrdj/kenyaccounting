@@ -1,0 +1,27 @@
+employee_id	contract_type	base_salary	weekly_hours	standard_workday_hours	housing_type	housing_market_value	nssf_tier	start_date	end_date	status
+1	hourly	16113.75	52	8.67	none		standard	2025-01-01		active
+2	hourly	25000.00	45	7.50	none		standard	2025-03-01		active
+3	prorated_min_wage	16113.75	45	7.50	none		standard	2025-06-01		active
+4	fixed_monthly	50000.00	45	8.00	none		standard	2024-07-01		active
+5	fixed_monthly	550000.00	45	8.00	none		standard	2023-01-01		active
+6	hourly	20000.00	52	8.67	none		standard	2025-02-01		active
+7	fixed_monthly	35000.00	45	8.00	none		standard	2024-11-01		active
+8	fixed_monthly	30000.00	45	8.00	none		standard	2025-04-01		active
+9	fixed_monthly	40000.00	45	8.00	none		standard	2024-09-01		active
+10	fixed_monthly	60000.00	45	8.00	quarters	8000.00	standard	2024-03-01		active
+11	fixed_monthly	200000.00	45	8.00	none		standard	2024-01-01		active
+12	fixed_monthly	500000.00	45	8.00	none		standard	2023-06-01		active
+13	fixed_monthly	10000.00	52	9.00	none		standard	2025-01-01		active
+14	fixed_monthly	15000.00	52	9.00	none		standard	2025-01-01		active
+15	fixed_monthly	20000.00	52	9.00	none		standard	2025-01-01		active
+16	fixed_monthly	25000.00	52	9.00	none		standard	2025-01-01		active
+17	fixed_monthly	30000.00	52	9.00	none		standard	2025-01-01		active
+18	fixed_monthly	50000.00	52	9.00	none		standard	2025-01-01		active
+19	fixed_monthly	80000.00	52	9.00	none		standard	2025-01-01		active
+20	fixed_monthly	22000.00	52	9.00	none		standard	2025-01-01		active
+21	fixed_monthly	28000.00	52	9.00	none		standard	2025-01-01		active
+22	fixed_monthly	45000.00	52	9.00	none		standard	2025-01-01		active
+23	fixed_monthly	18000.00	52	9.00	none		standard	2025-01-01		active
+24	fixed_monthly	55000.00	52	9.00	none		standard	2025-01-01		active
+25	fixed_monthly	32000.00	52	9.00	none		standard	2025-01-01		active
+26	fixed_monthly	70000.00	52	9.00	none		standard	2025-01-01		active
