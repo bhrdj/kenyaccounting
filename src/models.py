@@ -1,95 +1,33 @@
-from dataclasses import dataclass
-from datetime import date
+# src/models.py
+from typing import TypedDict, Optional
 from decimal import Decimal
 
+class Contract(TypedDict):
+    pay_basis: str  # 'hourly', 'min_wage_prorated', 'fixed_monthly'
+    base_salary: Decimal
+    std_weekly_hours: int
+    nssf_tier: str  # 'standard' or 'opt_out'
+    housing_type: str # 'cash_allowance', 'quarters', 'none'
+    housing_value: Decimal # For quarters
 
-# Core Data Classes
-
-@dataclass
-class Employee:
-    employee_id: int
-    name: str
-    national_id: str
-    kra_pin: str
-    phone: str
-    bank_account: str
-
-
-@dataclass
-class Contract:
-    employee_id: int
-    contract_type: str  # 'hourly', 'fixed_monthly', 'prorated_min_wage'
-    base_salary: Decimal  # Interpreted based on salary_basis
-    weekly_hours: int | None  # None for fixed_monthly
-    housing_type: str  # 'none', 'quarters', 'allowance'
-    housing_market_value: Decimal | None  # For 'quarters' only
-    nssf_tier: str  # 'standard', 'contracted_out'
-    start_date: date
-    end_date: date | None
-    status: str  # 'active', 'terminated'
-    salary_basis: str = "gross"  # 'base' or 'gross' - how base_salary is interpreted
-    hourly_divisor: str = "monthly"  # 'statutory' (225), 'monthly', or custom number
-
-
-@dataclass
-class LeaveStock:
-    employee_id: int
-    sick_full_pay: int  # days remaining
-    sick_half_pay: int
-    annual_leave: int
-    as_of_date: date
-
-
-@dataclass
-class TimesheetDay:
-    employee_id: int
-    date: date
+class Timesheet(TypedDict):
     hours_normal: Decimal
     hours_ot_1_5: Decimal
     hours_ot_2_0: Decimal
-    absent: bool
-    sick: bool
+    total_hours: Decimal
 
-
-# Calculation Results
-
-@dataclass
-class GrossBreakdown:
-    base_pay: Decimal
-    overtime_1_5: Decimal
-    overtime_2_0: Decimal
-    housing_allowance: Decimal  # cash housing allowance (15% of base, part of gross)
-    housing_benefit: Decimal  # taxable value of quarters (non-cash benefit)
-    total_gross: Decimal  # base_pay + overtime + housing_allowance
-
-
-@dataclass
-class Deductions:
-    nssf_tier_1: Decimal
-    nssf_tier_2: Decimal
-    shif: Decimal
-    ahl_employee: Decimal
-    paye: Decimal
-    total: Decimal
-
-
-@dataclass
-class LeaveAllocation:
-    sick_full_pay_used: int
-    sick_half_pay_used: int
-    annual_leave_used: int
-    unpaid_days: int
-    updated_stock: LeaveStock
-
-
-@dataclass
-class PaySlip:
-    employee: Employee
+class Employee(TypedDict):
+    pin: str
+    name: str
     contract: Contract
-    period: str  # e.g., "February 2026"
-    gross: GrossBreakdown
-    deductions: Deductions
-    leave: LeaveAllocation
+
+class PayrollResult(TypedDict):
+    gross_pay: Decimal
+    nssf_deduction: Decimal
+    shif_deduction: Decimal
+    ahl_deduction: Decimal
+    housing_benefit: Decimal
+    chargeable_pay: Decimal
+    paye_tax: Decimal
+    personal_relief: Decimal
     net_pay: Decimal
-    days_worked: list[TimesheetDay]
-    warnings: list[str] | None = None  # Validation warnings (e.g., below min wage)
