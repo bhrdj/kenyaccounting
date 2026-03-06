@@ -13,13 +13,12 @@ KenyAccounting is an open source payroll and accounting system designed specific
 ```
 KenyAccounting/
 ├── data_gitignored/                # All company data (gitignored)
-│   ├── inputs/                     # Source documents & spreadsheets
+│   ├── inputs/                     # All payroll input files
 │   │   ├── IDs-Certs - IDs.tsv     # Gold standard for employee IDs & registrations
+│   │   ├── master_employees.tsv    # Names, IDs, KRA PINs, NSSF#, bank accounts
+│   │   ├── contracts.tsv           # Contract terms, base & current salaries
 │   │   ├── Salaries - *.tsv        # Monthly salary calculation spreadsheets
 │   │   └── StaffCalendarAttendance_2025 - *.tsv  # Attendance/timesheet data
-│   ├── working/                    # Derived system files (built from inputs)
-│   │   ├── master_employees.tsv    # Names, IDs, KRA PINs, NSSF#, bank accounts
-│   │   └── contracts.tsv           # Contract terms, base & current salaries
 │   ├── SignedCgContracts/          # Scanned caregiver contract PDFs
 │   └── SignedMgrOfcContracts/      # Scanned manager/office contract PDFs
 ├── src/
@@ -32,11 +31,10 @@ KenyAccounting/
 ```
 
 ### Data Flow
-- **inputs/** contains source-of-truth documents: IDs-Certs (gold standard for identity data), Salaries spreadsheets, and attendance records
-- **SignedCgContracts/** and **SignedMgrOfcContracts/** contain scanned contract PDFs, OCR'd to extract contractual terms
-- **working/** contains derived files built from the above sources:
+- **inputs/** contains all payroll input files: IDs-Certs (gold standard for identity data), master_employees.tsv, contracts.tsv, salary spreadsheets, and attendance records
   - `master_employees.tsv` - consolidated employee registry populated from IDs-Certs
   - `contracts.tsv` - contract parameters populated from OCR'd PDFs, tracking both `base_salary` (contractual) and `current_base_salary` (actual pay including incremental raises)
+- **SignedCgContracts/** and **SignedMgrOfcContracts/** contain scanned contract PDFs, OCR'd to extract contractual terms
 - Incremental raises above contractual base are treated as monthly bonuses until formalized at next contract renewal
 
 ## Key Domain Concepts

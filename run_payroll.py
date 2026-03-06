@@ -19,9 +19,8 @@ from src.models import LeaveStock
 from src.outputs import PayslipRenderer, save_payroll_outputs
 
 
-DATA_DIR = Path("../el/payroll/working")
 INPUTS_DIR = Path("../el/payroll/inputs")
-TIMESHEETS_DIR = DATA_DIR / "timesheets"
+TIMESHEETS_DIR = INPUTS_DIR / "timesheets"
 OUTPUT_DIR = Path("../el/payroll/outputs")
 COMPANY_NAME = "B'aida Daycare & Learning Centre"
 
@@ -41,8 +40,8 @@ def main():
     print()
 
     # Load employee data
-    employees = {e.employee_id: e for e in load_employees(DATA_DIR / "master_employees.tsv")}
-    contracts = {c.employee_id: c for c in load_contracts(DATA_DIR / "contracts.tsv")}
+    employees = {e.employee_id: e for e in load_employees(INPUTS_DIR / "master_employees.tsv")}
+    contracts = {c.employee_id: c for c in load_contracts(INPUTS_DIR / "contracts.tsv")}
     leave_path = find_leave_stocks_for_month(INPUTS_DIR, year, month)
     if leave_path:
         leave_stocks = {l.employee_id: l for l in load_leave_stocks(leave_path)}

@@ -37,7 +37,7 @@ class PayslipRenderer:
         total_normal = sum(d.hours_normal for d in payslip.days_worked)
         total_ot_1_5 = sum(d.hours_ot_1_5 for d in payslip.days_worked)
         total_ot_2_0 = sum(d.hours_ot_2_0 for d in payslip.days_worked)
-        lines.append(f"Days worked:     {len([d for d in payslip.days_worked if not d.absent])}")
+        lines.append(f"Days worked:     {len([d for d in payslip.days_worked if d.hours_normal > 0])}")
         lines.append(f"Normal hours:    {total_normal:.2f}")
         if total_ot_1_5 > 0:
             lines.append(f"Overtime @1.5x:  {total_ot_1_5}")
