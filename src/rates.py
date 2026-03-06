@@ -80,9 +80,12 @@ class KenyanHolidays:
         return [h for h in cls.get_holidays_for_year(year) if h.date.month == month]
 
     @classmethod
-    def count_working_days(cls, year: int, month: int) -> int:
+    def count_working_days(cls, year: int, month: int, days_per_week: int = 5) -> int:
         """
-        Count working days in a month (Mon-Fri, excluding public holidays).
+        Count working days in a month, excluding public holidays.
+
+        days_per_week=5: Mon-Fri (default)
+        days_per_week=6: Mon-Sat
         """
         from calendar import monthrange, weekday
 
@@ -92,8 +95,8 @@ class KenyanHolidays:
         working_days = 0
         for day in range(1, num_days + 1):
             d = date(year, month, day)
-            # Monday=0, Sunday=6
-            if weekday(year, month, day) < 5 and d not in holidays:  # Mon-Fri
+            wd = weekday(year, month, day)  # Monday=0, Sunday=6
+            if wd < days_per_week and d not in holidays:
                 working_days += 1
 
         return working_days
@@ -102,10 +105,12 @@ class KenyanHolidays:
     def get_expected_hours(cls, year: int, month: int, weekly_hours: int = 45) -> Decimal:
         """
         Calculate expected working hours for a month.
-        Assumes daily hours = weekly_hours / 5 (for 5-day week).
+        Derives schedule (5 or 6 day) from weekly_hours, then uses
+        schedule-aware working day count.
         """
-        working_days = cls.count_working_days(year, month)
-        daily_hours = Decimal(weekly_hours) / Decimal(5)
+        days_per_week = 6 if weekly_hours >= 48 else 5
+        working_days = cls.count_working_days(year, month, days_per_week)
+        daily_hours = Decimal(weekly_hours) / Decimal(days_per_week)
         return working_days * daily_hours
 
 

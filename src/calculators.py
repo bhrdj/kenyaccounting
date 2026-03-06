@@ -53,9 +53,7 @@ class GrossCalculator:
             return self.STATUTORY_DIVISOR
 
     def calculate(self) -> GrossBreakdown:
-        if self.contract.contract_type == "hourly":
-            return self._calc_hourly()
-        elif self.contract.contract_type == "fixed_monthly":
+        if self.contract.contract_type in ("hourly", "consolidated_leave", "fixed_monthly"):
             return self._calc_fixed_monthly()
         elif self.contract.contract_type == "prorated_min_wage":
             return self._calc_prorated_min_wage()
@@ -74,7 +72,7 @@ class GrossCalculator:
         - If employer provides housing (housing_type='quarters'), no cash allowance
           (taxable benefit is calculated separately by HousingBenefitCalculator)
         """
-        if self.contract.housing_type == "quarters":
+        if self.contract.housing_type in ("quarters", "dorm"):
             # Employer provides housing - no cash allowance needed
             actual_base = base_pay
             housing_allowance = Decimal(0)
@@ -106,6 +104,9 @@ class GrossCalculator:
         overtime_1_5 = hourly_rate * Decimal("1.5") * total_ot_1_5
         overtime_2_0 = hourly_rate * Decimal("2.0") * total_ot_2_0
 
+        # Baseline: what full-time would pay (before housing)
+        baseline, _, _ = self._compute_housing(self.contract.base_salary)
+
         # For hourly, apply housing to the total earned (base + overtime)
         earned = raw_base_pay + overtime_1_5 + overtime_2_0
         actual_base, housing_allowance, total_gross = self._compute_housing(earned)
@@ -117,6 +118,8 @@ class GrossCalculator:
             housing_allowance=housing_allowance,
             housing_benefit=Decimal(0),
             total_gross=total_gross,
+            baseline_base_pay=baseline,
+            worked_base_pay=actual_base,
         )
 
     def _calc_fixed_monthly(self) -> GrossBreakdown:
@@ -130,6 +133,8 @@ class GrossCalculator:
             housing_allowance=housing_allowance,
             housing_benefit=Decimal(0),
             total_gross=total_gross,
+            baseline_base_pay=actual_base,
+            worked_base_pay=actual_base,
         )
 
     def _calc_prorated_min_wage(self) -> GrossBreakdown:
@@ -141,6 +146,9 @@ class GrossCalculator:
 
         actual_base, housing_allowance, total_gross = self._compute_housing(raw_base_pay)
 
+        # Baseline: full-time monthly salary from contract
+        baseline, _, _ = self._compute_housing(self.contract.base_salary)
+
         return GrossBreakdown(
             base_pay=actual_base,
             overtime_1_5=Decimal(0),
@@ -148,46 +156,100 @@ class GrossCalculator:
             housing_allowance=housing_allowance,
             housing_benefit=Decimal(0),
             total_gross=total_gross,
+            baseline_base_pay=baseline,
+            worked_base_pay=actual_base,
         )
 
 
 class LeaveCalculator:
-    def __init__(self, timesheet_days: list[TimesheetDay], leave_stock: LeaveStock):
+    def __init__(self, timesheet_days: list[TimesheetDay], leave_stock: LeaveStock, contract: Contract):
         self.timesheet_days = timesheet_days
         self.leave_stock = leave_stock
+        self.contract = contract
+        self.daily_hours = self._get_daily_hours(contract)
+
+    @staticmethod
+    def _get_daily_hours(contract: Contract) -> Decimal:
+        """Derive hours per work day from contract schedule."""
+        if contract.weekly_hours is None:
+            return Decimal("8")
+        wh = Decimal(str(contract.weekly_hours))
+        # 48+ hours/week implies 6-day schedule, otherwise 5-day
+        work_days = Decimal("6") if contract.weekly_hours >= 48 else Decimal("5")
+        return (wh / work_days).quantize(Decimal("0.01"))
+
+    # Employment Act: 21 annual leave days/year, 7+7 sick days/year
+    ANNUAL_LEAVE_ACCRUAL = Decimal("1.75")       # 21 / 12
+    SICK_FULL_PAY_ACCRUAL = Decimal("0.583333")  # 7 / 12
+    SICK_HALF_PAY_ACCRUAL = Decimal("0.583333")  # 7 / 12
 
     def allocate(self) -> LeaveAllocation:
-        sick_full_used = 0
-        sick_half_used = 0
-        annual_used = 0
-        unpaid_days = 0
+        sick_full_used = Decimal(0)  # hours
+        sick_half_used = Decimal(0)  # hours
+        annual_used = Decimal(0)  # hours
+        unpaid_hours = Decimal(0)
 
-        # Copy current stock values
-        remaining_sick_full = self.leave_stock.sick_full_pay
-        remaining_sick_half = self.leave_stock.sick_half_pay
-        remaining_annual = self.leave_stock.annual_leave
+        # Stock balances are in days — add monthly accrual first
+        # Consolidated leave contracts don't accrue annual leave (it's built into the schedule)
+        remaining_sick_full = self.leave_stock.sick_full_pay + self.SICK_FULL_PAY_ACCRUAL
+        remaining_sick_half = self.leave_stock.sick_half_pay + self.SICK_HALF_PAY_ACCRUAL
+        annual_accrual = Decimal(0) if self.contract.contract_type == "consolidated_leave" else self.ANNUAL_LEAVE_ACCRUAL
+        remaining_annual = self.leave_stock.annual_leave + annual_accrual
 
         for day in self.timesheet_days:
             if not day.absent:
                 continue
 
+            # Absent hours = daily_hours minus any hours actually worked
+            absent_hours = self.daily_hours - day.hours_normal
+            if absent_hours <= 0:
+                continue
+            absent_days = absent_hours / self.daily_hours  # fraction of day absent
+
             if day.sick:
-                # Draw from sick leave
+                # Draw from sick leave stock
                 if remaining_sick_full > 0:
-                    sick_full_used += 1
-                    remaining_sick_full -= 1
+                    sick_full_used += absent_hours
+                    remaining_sick_full -= absent_days
                 elif remaining_sick_half > 0:
-                    sick_half_used += 1
-                    remaining_sick_half -= 1
+                    sick_half_used += absent_hours
+                    remaining_sick_half -= absent_days
                 else:
-                    unpaid_days += 1
+                    unpaid_hours += absent_hours
             else:
                 # Non-sick absence: draw from annual leave
                 if remaining_annual > 0:
-                    annual_used += 1
-                    remaining_annual -= 1
+                    annual_used += absent_hours
+                    remaining_annual -= absent_days
                 else:
-                    unpaid_days += 1
+                    unpaid_hours += absent_hours
+
+        # Clamp negative balances: reclassify the excess (only up to
+        # what was actually allocated this period — don't fix pre-existing deficits)
+        # 1. Sick full-pay overflow → half-pay sick
+        if remaining_sick_full < 0:
+            excess_days = min(-remaining_sick_full, sick_full_used / self.daily_hours) if self.daily_hours else Decimal(0)
+            excess_hours = excess_days * self.daily_hours
+            sick_full_used -= excess_hours
+            sick_half_used += excess_hours
+            remaining_sick_half -= excess_days
+            remaining_sick_full += excess_days
+
+        # 2. Sick half-pay overflow → unpaid
+        if remaining_sick_half < 0:
+            excess_days = min(-remaining_sick_half, sick_half_used / self.daily_hours) if self.daily_hours else Decimal(0)
+            excess_hours = excess_days * self.daily_hours
+            sick_half_used -= excess_hours
+            unpaid_hours += excess_hours
+            remaining_sick_half += excess_days
+
+        # 3. Annual leave overflow → unpaid
+        if remaining_annual < 0:
+            excess_days = min(-remaining_annual, annual_used / self.daily_hours) if self.daily_hours else Decimal(0)
+            excess_hours = excess_days * self.daily_hours
+            annual_used -= excess_hours
+            unpaid_hours += excess_hours
+            remaining_annual += excess_days
 
         updated_stock = LeaveStock(
             employee_id=self.leave_stock.employee_id,
@@ -201,7 +263,7 @@ class LeaveCalculator:
             sick_full_pay_used=sick_full_used,
             sick_half_pay_used=sick_half_used,
             annual_leave_used=annual_used,
-            unpaid_days=unpaid_days,
+            unpaid_hours=unpaid_hours,
             updated_stock=updated_stock,
         )
 
@@ -266,7 +328,7 @@ class HousingBenefitCalculator:
         self.gross = gross
 
     def calculate(self) -> Decimal:
-        if self.contract.housing_type == "quarters":
+        if self.contract.housing_type in ("quarters", "dorm"):
             fifteen_pct = self.gross * Decimal("0.15")
             return max(self.contract.housing_market_value, fifteen_pct)
         return Decimal(0)
@@ -354,16 +416,16 @@ class PayrollEngine:
         leave_stock: LeaveStock,
     ) -> PaySlip:
         # 1. Calculate leave allocation
-        leave_calc = LeaveCalculator(timesheet_days, leave_stock)
+        leave_calc = LeaveCalculator(timesheet_days, leave_stock, contract)
         leave = leave_calc.allocate()
 
         # 2. Calculate gross
         gross_calc = GrossCalculator(contract, timesheet_days, self.payroll_date)
         gross = gross_calc.calculate()
 
-        # 3. Apply leave adjustments for fixed monthly contracts
-        if contract.contract_type == "fixed_monthly":
-            gross = self._apply_leave_adjustments(gross, leave, contract)
+        # 3. Apply hour adjustments (OT, leave deductions) using statutory divisor
+        if contract.contract_type in ("hourly", "consolidated_leave", "fixed_monthly"):
+            gross = self._apply_monthly_adjustments(gross, leave, contract, timesheet_days)
 
         # 4. Add housing benefit (for quarters - non-cash taxable benefit)
         housing_calc = HousingBenefitCalculator(contract, gross.total_gross)
@@ -375,6 +437,11 @@ class PayrollEngine:
             housing_allowance=gross.housing_allowance,
             housing_benefit=housing_benefit,
             total_gross=gross.total_gross,
+            baseline_base_pay=gross.baseline_base_pay,
+            worked_base_pay=gross.worked_base_pay,
+            leave_pay=gross.leave_pay,
+            leave_half_pay_deduction=gross.leave_half_pay_deduction,
+            leave_unpaid_deduction=gross.leave_unpaid_deduction,
         )
 
         # 5. Calculate deductions (NSSF, SHIF, AHL)
@@ -439,33 +506,91 @@ class PayrollEngine:
             warnings=warnings if warnings else None,
         )
 
-    def _apply_leave_adjustments(
-        self, gross: GrossBreakdown, leave: LeaveAllocation, contract: Contract
+    def _apply_leave_pay(
+        self, gross: GrossBreakdown, leave: LeaveAllocation,
+        contract: Contract, timesheet_days: list[TimesheetDay],
     ) -> GrossBreakdown:
-        # For fixed monthly, deduct for unpaid days and half-pay sick days
-        # Assume 22 working days in a month
-        daily_rate = gross.base_pay / Decimal(22)
+        """For hourly/consolidated_leave, add pay for leave-covered absence hours."""
+        full_hours = leave.annual_leave_used + leave.sick_full_pay_used
+        half_hours = leave.sick_half_pay_used
 
-        # Half pay for sick_half_pay_used days (deduct 50%)
-        half_pay_deduction = daily_rate * Decimal("0.5") * leave.sick_half_pay_used
+        if full_hours <= 0 and half_hours <= 0:
+            return gross
 
-        # Full deduction for unpaid days
-        unpaid_deduction = daily_rate * leave.unpaid_days
+        gross_calc = GrossCalculator(contract, timesheet_days, self.payroll_date)
+        divisor = gross_calc._get_divisor()
+        hourly_rate = contract.base_salary / divisor
 
-        adjusted_base = gross.base_pay - half_pay_deduction - unpaid_deduction
+        # Raw leave pay at contract hourly rate
+        leave_pay_raw = (
+            hourly_rate * full_hours
+            + hourly_rate * Decimal("0.5") * half_hours
+        )
 
-        # Recalculate housing allowance proportionally if applicable
-        if gross.housing_allowance > 0:
-            ratio = adjusted_base / gross.base_pay if gross.base_pay > 0 else Decimal(1)
-            adjusted_housing = gross.housing_allowance * ratio
-        else:
-            adjusted_housing = Decimal(0)
+        # Split leave pay using same housing logic as main pay
+        leave_base, leave_housing, leave_total = gross_calc._compute_housing(leave_pay_raw)
 
         return GrossBreakdown(
-            base_pay=adjusted_base,
+            base_pay=gross.base_pay + leave_base,
             overtime_1_5=gross.overtime_1_5,
             overtime_2_0=gross.overtime_2_0,
+            housing_allowance=gross.housing_allowance + leave_housing,
+            housing_benefit=gross.housing_benefit,
+            total_gross=gross.total_gross + leave_total,
+            baseline_base_pay=gross.baseline_base_pay,
+            worked_base_pay=gross.base_pay,
+            leave_pay=leave_base,
+        )
+
+    def _apply_monthly_adjustments(
+        self, gross: GrossBreakdown, leave: LeaveAllocation,
+        contract: Contract, timesheet_days: list[TimesheetDay],
+    ) -> GrossBreakdown:
+        """Net all hour adjustments (OT, leave) and apply statutory hourly rate."""
+        hourly_rate = gross.base_pay / GrossCalculator.STATUTORY_DIVISOR
+
+        # Gather hours
+        ot_1_5_hours = sum(d.hours_ot_1_5 for d in timesheet_days)
+        ot_2_0_hours = sum(d.hours_ot_2_0 for d in timesheet_days)
+
+        # Net weighted hours: OT adds, leave deducts
+        net_hours = (
+            ot_1_5_hours * Decimal("1.5")
+            + ot_2_0_hours * Decimal("2.0")
+            - leave.sick_half_pay_used * Decimal("0.5")
+            - leave.unpaid_hours
+        )
+        net_adjustment = net_hours * hourly_rate
+
+        # Display components (same rate, for payslip breakdown)
+        ot_1_5_pay = ot_1_5_hours * Decimal("1.5") * hourly_rate
+        ot_2_0_pay = ot_2_0_hours * Decimal("2.0") * hourly_rate
+        half_pay_deduction = leave.sick_half_pay_used * Decimal("0.5") * hourly_rate
+        unpaid_deduction = leave.unpaid_hours * hourly_rate
+
+        # Housing scales down with deductions (OT doesn't add housing)
+        total_deduction = half_pay_deduction + unpaid_deduction
+        if gross.housing_allowance > 0 and gross.base_pay > 0:
+            housing_ratio = (gross.base_pay - total_deduction) / gross.base_pay
+            adjusted_housing = gross.housing_allowance * housing_ratio
+        else:
+            adjusted_housing = gross.housing_allowance
+
+        total_gross = (
+            gross.base_pay + ot_1_5_pay + ot_2_0_pay
+            + adjusted_housing - half_pay_deduction - unpaid_deduction
+        )
+
+        return GrossBreakdown(
+            base_pay=gross.base_pay,
+            overtime_1_5=ot_1_5_pay,
+            overtime_2_0=ot_2_0_pay,
             housing_allowance=adjusted_housing,
             housing_benefit=gross.housing_benefit,
-            total_gross=adjusted_base + gross.overtime_1_5 + gross.overtime_2_0 + adjusted_housing,
+            total_gross=total_gross,
+            baseline_base_pay=gross.baseline_base_pay,
+            worked_base_pay=gross.worked_base_pay,
+            leave_pay=gross.leave_pay,
+            leave_half_pay_deduction=half_pay_deduction,
+            leave_unpaid_deduction=unpaid_deduction,
         )

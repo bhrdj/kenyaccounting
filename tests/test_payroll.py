@@ -18,7 +18,7 @@ from decimal import Decimal
 
 import pytest
 
-from src.loaders import load_contracts, load_employees, load_leave_stocks, load_timesheet
+from src.loaders import load_contracts, load_employees, load_leave_stocks, load_timesheet, find_leave_stocks_for_month
 from src.calculators import (
     DeductionCalculator,
     GrossCalculator,
@@ -27,7 +27,7 @@ from src.calculators import (
     PAYECalculator,
     PayrollEngine,
 )
-from src.models import Contract
+from src.models import Contract, LeaveStock
 from src.rates import StatutoryRates
 
 
@@ -262,7 +262,8 @@ def contracts():
 
 @pytest.fixture
 def leave_stocks():
-    return {l.employee_id: l for l in load_leave_stocks("tests/fixtures/test_leave_stocks.tsv")}
+    path = find_leave_stocks_for_month("tests/fixtures", 2026, 2)
+    return {l.employee_id: l for l in load_leave_stocks(path)}
 
 
 @pytest.fixture
@@ -461,13 +462,17 @@ class TestGrossFromTimesheet:
         gross = calc.calculate()
         assert gross.base_pay == Decimal("50000")
 
-    def test_hourly_with_overtime(self, contracts, timesheet_feb):
+    def test_hourly_with_overtime(self, contracts, timesheet_feb, leave_stocks):
         """Hourly worker with overtime hours recorded."""
         # Frank: employee_id=6, has overtime in timesheet
-        calc = GrossCalculator(contracts[6], timesheet_feb[6], date(2026, 2, 28))
-        gross = calc.calculate()
-        assert gross.overtime_1_5 > 0  # 12 hours at 1.5x
-        assert gross.overtime_2_0 > 0  # 4 hours at 2.0x
+        # OT is computed by PayrollEngine._apply_monthly_adjustments, not GrossCalculator
+        from src.models import Employee
+        emp = Employee(employee_id=6, name="Frank Test", national_id="", kra_pin="",
+                       nssf_no="", shif_no="", phone="", bank_account="")
+        engine = PayrollEngine(date(2026, 2, 28))
+        payslip = engine.process(emp, contracts[6], timesheet_feb[6], leave_stocks[6])
+        assert payslip.gross.overtime_1_5 > 0  # 12 hours at 1.5x
+        assert payslip.gross.overtime_2_0 > 0  # 4 hours at 2.0x
 
 
 # =============================================================================
@@ -481,39 +486,43 @@ class TestLeaveAllocation:
     NOT EXTERNALLY VALIDATED - tests leave allocation logic per Employment Act.
     """
 
-    def test_sick_leave_full_pay_sufficient(self, leave_stocks, timesheet_feb):
-        """Sick days covered by full-pay stock."""
-        # Grace (7): 4 sick days, 7 full-pay stock → all full-pay
-        calc = LeaveCalculator(timesheet_feb[7], leave_stocks[7])
+    def test_sick_leave_full_pay_sufficient(self, contracts, leave_stocks, timesheet_feb):
+        """Sick days covered by full-pay stock. Usage in hours, stock in days."""
+        # Grace (7): fixed_monthly, 8hr/day. 4 sick days, 7 full-pay stock + 0.583 accrual
+        calc = LeaveCalculator(timesheet_feb[7], leave_stocks[7], contracts[7])
         leave = calc.allocate()
 
-        assert leave.sick_full_pay_used == 4
-        assert leave.sick_half_pay_used == 0
-        assert leave.unpaid_days == 0
-        assert leave.updated_stock.sick_full_pay == 3  # 7 - 4
+        assert leave.sick_full_pay_used == Decimal("32")  # 4 days × 8 hrs
+        assert leave.sick_half_pay_used == Decimal("0")
+        assert leave.unpaid_hours == Decimal("0")
+        assert leave.updated_stock.sick_full_pay == Decimal("3.583333")  # 7 + 0.583 - 4
 
-    def test_sick_leave_split_full_and_half(self, leave_stocks, timesheet_feb):
-        """Sick days split between full-pay and half-pay stocks."""
-        # Henry (8): 6 sick days, 3 full-pay stock → 3 full + 3 half
-        calc = LeaveCalculator(timesheet_feb[8], leave_stocks[8])
+    def test_sick_leave_split_full_and_half(self, contracts, leave_stocks, timesheet_feb):
+        """Sick days split between full-pay and half-pay stocks.
+
+        Henry (8): 8hr/day. 6 sick days, 3 full-pay stock + 0.583 accrual = 3.583.
+        Loop uses 4 days full-pay (goes to -0.417), clamp reclassifies 0.417 days to half.
+        Result: 3.583 days full-pay used (28.67 hrs), 2.417 days half-pay used (19.33 hrs).
+        """
+        calc = LeaveCalculator(timesheet_feb[8], leave_stocks[8], contracts[8])
         leave = calc.allocate()
 
-        assert leave.sick_full_pay_used == 3
-        assert leave.sick_half_pay_used == 3
-        assert leave.unpaid_days == 0
-        assert leave.updated_stock.sick_full_pay == 0
-        assert leave.updated_stock.sick_half_pay == 4  # 7 - 3
+        assert leave.sick_full_pay_used == Decimal("28.666664")  # 3.583 days × 8 hrs
+        assert leave.sick_half_pay_used == Decimal("19.333336")  # 2.417 days × 8 hrs
+        assert leave.unpaid_hours == Decimal("0")
+        assert leave.updated_stock.sick_full_pay == Decimal("0.000000")
+        assert leave.updated_stock.sick_half_pay == Decimal("5.166666")  # 7 + 0.583 - 2.417
 
-    def test_annual_leave_for_non_sick_absence(self, leave_stocks, timesheet_feb):
-        """Non-sick absence draws from annual leave stock."""
-        # Irene (9): 5 non-sick absent, 10 annual leave stock
-        calc = LeaveCalculator(timesheet_feb[9], leave_stocks[9])
+    def test_annual_leave_for_non_sick_absence(self, contracts, leave_stocks, timesheet_feb):
+        """Non-sick absence draws from annual leave stock. Usage in hours, stock in days."""
+        # Irene (9): fixed_monthly, 8hr/day. 5 non-sick absent, 10 annual leave stock + 1.75 accrual
+        calc = LeaveCalculator(timesheet_feb[9], leave_stocks[9], contracts[9])
         leave = calc.allocate()
 
-        assert leave.annual_leave_used == 5
-        assert leave.sick_full_pay_used == 0
-        assert leave.unpaid_days == 0
-        assert leave.updated_stock.annual_leave == 5  # 10 - 5
+        assert leave.annual_leave_used == Decimal("40")  # 5 days × 8 hrs
+        assert leave.sick_full_pay_used == Decimal("0")
+        assert leave.unpaid_hours == Decimal("0")
+        assert leave.updated_stock.annual_leave == Decimal("6.75")  # 10 + 1.75 - 5
 
 
 # =============================================================================
@@ -578,13 +587,14 @@ class TestPayrollEngineIntegration:
 
     def test_payslip_with_sick_leave(self, engine, employees, contracts, leave_stocks, timesheet_feb):
         """Full payslip with sick leave affecting pay."""
-        # Henry (8): 6 sick days, 3 full-pay + 3 half-pay
+        # Henry (8): 6 sick days, 3.583 full-pay + 2.417 half-pay (after accrual + clamp)
         payslip = engine.process(employees[8], contracts[8], timesheet_feb[8], leave_stocks[8])
 
-        assert payslip.leave.sick_full_pay_used == 3
-        assert payslip.leave.sick_half_pay_used == 3
-        # Base reduced for half-pay days
-        assert payslip.gross.base_pay < Decimal("30000")
+        assert payslip.leave.sick_full_pay_used == Decimal("28.666664")
+        assert payslip.leave.sick_half_pay_used == Decimal("19.333336")
+        # Base pay shows full salary; deductions shown separately
+        assert payslip.gross.base_pay == Decimal("30000")
+        assert payslip.gross.leave_half_pay_deduction > 0
 
     def test_payslip_with_housing_benefit(self, engine, employees, contracts, leave_stocks, timesheet_feb):
         """Full payslip with housing quarters benefit."""

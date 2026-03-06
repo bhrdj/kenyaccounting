@@ -8,22 +8,36 @@ KenyAccounting is an open source payroll and accounting system designed specific
 
 **Current Status:** Pre-implementation planning phase. The `specs/` directory contains regulatory research and initial design specifications, but no code has been written yet.
 
-## Planned Architecture
+## Architecture
 
 ```
 KenyAccounting/
-├── data/                       # User data (TSVs, Git tracked locally)
-│   ├── master_employees.tsv    # Names, PINs, Base Salaries
-│   ├── contracts.tsv           # Hourly divisors, contract types
-│   └── timesheets/             # Monthly logs (e.g., 2026_01.tsv)
+├── data_gitignored/                # All company data (gitignored)
+│   ├── inputs/                     # Source documents & spreadsheets
+│   │   ├── IDs-Certs - IDs.tsv     # Gold standard for employee IDs & registrations
+│   │   ├── Salaries - *.tsv        # Monthly salary calculation spreadsheets
+│   │   └── StaffCalendarAttendance_2025 - *.tsv  # Attendance/timesheet data
+│   ├── working/                    # Derived system files (built from inputs)
+│   │   ├── master_employees.tsv    # Names, IDs, KRA PINs, NSSF#, bank accounts
+│   │   └── contracts.tsv           # Contract terms, base & current salaries
+│   ├── SignedCgContracts/          # Scanned caregiver contract PDFs
+│   └── SignedMgrOfcContracts/      # Scanned manager/office contract PDFs
 ├── src/
-│   ├── compliance_2026.py      # Tax bands, NSSF limits, statutory rates
-│   ├── models.py               # Data classes (Employee, Contract)
-│   ├── engine.py               # Gross-to-Net calculation logic
-│   └── outputs.py              # Bank CSV, statutory returns, PDF generators
-├── app.py                      # Streamlit UI
-└── requirements.txt            # streamlit, pandas, reportlab, openpyxl
+│   ├── compliance_2026.py          # Tax bands, NSSF limits, statutory rates
+│   ├── models.py                   # Data classes (Employee, Contract)
+│   ├── engine.py                   # Gross-to-Net calculation logic
+│   └── outputs.py                  # Bank CSV, statutory returns, PDF generators
+├── app.py                          # Streamlit UI
+└── requirements.txt                # streamlit, pandas, reportlab, openpyxl
 ```
+
+### Data Flow
+- **inputs/** contains source-of-truth documents: IDs-Certs (gold standard for identity data), Salaries spreadsheets, and attendance records
+- **SignedCgContracts/** and **SignedMgrOfcContracts/** contain scanned contract PDFs, OCR'd to extract contractual terms
+- **working/** contains derived files built from the above sources:
+  - `master_employees.tsv` - consolidated employee registry populated from IDs-Certs
+  - `contracts.tsv` - contract parameters populated from OCR'd PDFs, tracking both `base_salary` (contractual) and `current_base_salary` (actual pay including incremental raises)
+- Incremental raises above contractual base are treated as monthly bonuses until formalized at next contract renewal
 
 ## Key Domain Concepts
 
