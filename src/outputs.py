@@ -30,35 +30,32 @@ class PayslipRenderer:
         lines.append(f"Bank A/C:    {payslip.employee.bank_account}")
         lines.append("")
 
-        # Work summary
+        # Work & leave summary
+        from .rates import KenyanHolidays
         lines.append("-" * 60)
         lines.append("WORK SUMMARY")
         lines.append("-" * 60)
         total_normal = sum(d.hours_normal for d in payslip.days_worked)
         total_ot_1_5 = sum(d.hours_ot_1_5 for d in payslip.days_worked)
         total_ot_2_0 = sum(d.hours_ot_2_0 for d in payslip.days_worked)
-        lines.append(f"Days worked:     {len([d for d in payslip.days_worked if d.hours_normal > 0])}")
+        days_worked = len([d for d in payslip.days_worked if d.hours_normal > 0])
+        holidays = KenyanHolidays.get_holidays_for_month(
+            payslip.days_worked[0].date.year, payslip.days_worked[0].date.month
+        ) if payslip.days_worked else []
+        lines.append(f"Days worked:     {days_worked}")
+        if holidays:
+            lines.append(f"Public holidays: {len(holidays)}  ({', '.join(h.name for h in holidays)})")
         lines.append(f"Normal hours:    {total_normal:.2f}")
         if total_ot_1_5 > 0:
             lines.append(f"Overtime @1.5x:  {total_ot_1_5}")
         if total_ot_2_0 > 0:
             lines.append(f"Overtime @2.0x:  {total_ot_2_0}")
+        leave = payslip.leave
+        lines.append(f"Annual leave:    {leave.annual_leave_used:.2f} hrs")
+        lines.append(f"Sick full pay:   {leave.sick_full_pay_used:.2f} hrs")
+        lines.append(f"Sick half pay:   {leave.sick_half_pay_used:.2f} hrs")
+        lines.append(f"Unpaid:          {leave.unpaid_hours:.2f} hrs")
         lines.append("")
-
-        # Leave used
-        if payslip.leave.sick_full_pay_used or payslip.leave.sick_half_pay_used or payslip.leave.annual_leave_used or payslip.leave.unpaid_hours:
-            lines.append("-" * 60)
-            lines.append("LEAVE USED")
-            lines.append("-" * 60)
-            if payslip.leave.sick_full_pay_used:
-                lines.append(f"Sick (full pay):   {payslip.leave.sick_full_pay_used:.2f} hrs")
-            if payslip.leave.sick_half_pay_used:
-                lines.append(f"Sick (half pay):   {payslip.leave.sick_half_pay_used:.2f} hrs")
-            if payslip.leave.annual_leave_used:
-                lines.append(f"Annual leave:      {payslip.leave.annual_leave_used:.2f} hrs")
-            if payslip.leave.unpaid_hours:
-                lines.append(f"Unpaid:            {payslip.leave.unpaid_hours:.2f} hrs")
-            lines.append("")
 
         # Earnings
         lines.append("-" * 60)

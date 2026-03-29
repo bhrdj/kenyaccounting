@@ -217,6 +217,7 @@ def load_timesheet_folder(
         entries = []
         with open(tsv_file, newline="", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f, delimiter="\t")
+            reader.fieldnames = [h.strip() for h in reader.fieldnames]
             for row in reader:
                 date_str = row.get("date", "").strip()
                 if not date_str:

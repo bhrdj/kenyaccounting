@@ -14,7 +14,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from src.calculators import PayrollEngine
-from src.loaders import load_contracts, load_employees, load_leave_stocks, load_timesheet, find_leave_stocks_for_month
+from src.loaders import load_contracts, load_employees, load_leave_stocks, load_timesheet, load_timesheet_folder, find_leave_stocks_for_month
 from src.models import LeaveStock
 from src.outputs import PayslipRenderer, save_payroll_outputs
 
@@ -52,16 +52,19 @@ def main():
     if leave_path:
         print(f"Leave stocks from: {leave_path.name}")
 
-    # Load pre-converted timesheet
-    ts_file = TIMESHEETS_DIR / f"{year}_{month:02d}.tsv"
-    if not ts_file.exists():
-        print(f"Timesheet not found: {ts_file}")
-        print(f"Run: cd ../el && python3 payroll/tools/convert_attendance.py --year {year} --month {month}")
+    # Load timesheets: try per-employee folder first, fall back to flat file
+    ts_folder = TIMESHEETS_DIR / str(year)
+    ts_flat = TIMESHEETS_DIR / f"{year}_{month:02d}.tsv"
+    if ts_folder.is_dir():
+        timesheets = load_timesheet_folder(ts_folder, year, month)
+    elif ts_flat.exists():
+        ts_entries = load_timesheet(ts_flat)
+        timesheets = {}
+        for entry in ts_entries:
+            timesheets.setdefault(entry.employee_id, []).append(entry)
+    else:
+        print(f"No timesheets found at {ts_folder} or {ts_flat}")
         return 1
-    ts_entries = load_timesheet(ts_file)
-    timesheets = {}
-    for entry in ts_entries:
-        timesheets.setdefault(entry.employee_id, []).append(entry)
 
     print(f"Loaded timesheets for {len(timesheets)} employees")
     print()
