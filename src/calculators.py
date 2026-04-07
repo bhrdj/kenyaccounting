@@ -138,6 +138,8 @@ class GrossCalculator:
         )
 
     def _calc_prorated_min_wage(self) -> GrossBreakdown:
+        from .rates import KenyanHolidays
+
         # Standard monthly hours based on weekly hours
         std_monthly_hours = Decimal(self.contract.weekly_hours * 4)
         worked_hours = sum(d.hours_normal for d in self.timesheet_days)
@@ -149,6 +151,18 @@ class GrossCalculator:
         # Baseline: full-time monthly salary from contract
         baseline, _, _ = self._compute_housing(self.contract.base_salary)
 
+        # Worked-holiday premium: an extra normal day's pay per holiday worked.
+        holiday_premium = Decimal(0)
+        if self.payroll_date is not None:
+            worked_holiday_count = KenyanHolidays.count_worked_holidays(
+                self.payroll_date.year, self.payroll_date.month, self.timesheet_days
+            )
+            if worked_holiday_count > 0:
+                hourly_rate = self.contract.base_salary / std_monthly_hours
+                daily_hours = LeaveCalculator._get_daily_hours(self.contract)
+                holiday_premium = Decimal(worked_holiday_count) * daily_hours * hourly_rate
+                total_gross += holiday_premium
+
         return GrossBreakdown(
             base_pay=actual_base,
             overtime_1_5=Decimal(0),
@@ -158,6 +172,7 @@ class GrossCalculator:
             total_gross=total_gross,
             baseline_base_pay=baseline,
             worked_base_pay=actual_base,
+            holiday_premium=holiday_premium,
         )
 
 
@@ -442,6 +457,7 @@ class PayrollEngine:
             leave_pay=gross.leave_pay,
             leave_half_pay_deduction=gross.leave_half_pay_deduction,
             leave_unpaid_deduction=gross.leave_unpaid_deduction,
+            holiday_premium=gross.holiday_premium,
         )
 
         # 5. Calculate deductions (NSSF, SHIF, AHL)
@@ -546,17 +562,34 @@ class PayrollEngine:
         self, gross: GrossBreakdown, leave: LeaveAllocation,
         contract: Contract, timesheet_days: list[TimesheetDay],
     ) -> GrossBreakdown:
-        """Net all hour adjustments (OT, leave) and apply statutory hourly rate."""
+        """Net all hour adjustments (OT, leave, worked-holiday premium) and
+        apply the statutory hourly rate."""
+        from .rates import KenyanHolidays
+
         hourly_rate = gross.base_pay / GrossCalculator.STATUTORY_DIVISOR
 
         # Gather hours
         ot_1_5_hours = sum(d.hours_ot_1_5 for d in timesheet_days)
         ot_2_0_hours = sum(d.hours_ot_2_0 for d in timesheet_days)
 
-        # Net weighted hours: OT adds, leave deducts
+        # Worked-holiday premium: public holidays are paid regardless (the
+        # base salary already covers them as paid days off because the
+        # monthly divisor excludes holiday dates). Working one earns an
+        # extra normal day's pay on top, per Employment Act practice.
+        # OT hours on a holiday are tracked separately as ot_2_0 and are
+        # NOT double-counted here.
+        worked_holiday_count = KenyanHolidays.count_worked_holidays(
+            self.payroll_date.year, self.payroll_date.month, timesheet_days
+        )
+        daily_hours = LeaveCalculator._get_daily_hours(contract)
+        holiday_premium_hours = Decimal(worked_holiday_count) * daily_hours
+        holiday_premium = holiday_premium_hours * hourly_rate
+
+        # Net weighted hours: OT and holiday premium add, leave deducts
         net_hours = (
             ot_1_5_hours * Decimal("1.5")
             + ot_2_0_hours * Decimal("2.0")
+            + holiday_premium_hours
             - leave.sick_half_pay_used * Decimal("0.5")
             - leave.unpaid_hours
         )
@@ -568,7 +601,7 @@ class PayrollEngine:
         half_pay_deduction = leave.sick_half_pay_used * Decimal("0.5") * hourly_rate
         unpaid_deduction = leave.unpaid_hours * hourly_rate
 
-        # Housing scales down with deductions (OT doesn't add housing)
+        # Housing scales down with deductions (OT/holiday premium don't add housing)
         total_deduction = half_pay_deduction + unpaid_deduction
         if gross.housing_allowance > 0 and gross.base_pay > 0:
             housing_ratio = (gross.base_pay - total_deduction) / gross.base_pay
@@ -577,7 +610,7 @@ class PayrollEngine:
             adjusted_housing = gross.housing_allowance
 
         total_gross = (
-            gross.base_pay + ot_1_5_pay + ot_2_0_pay
+            gross.base_pay + ot_1_5_pay + ot_2_0_pay + holiday_premium
             + adjusted_housing - half_pay_deduction - unpaid_deduction
         )
 
@@ -593,4 +626,5 @@ class PayrollEngine:
             leave_pay=gross.leave_pay,
             leave_half_pay_deduction=half_pay_deduction,
             leave_unpaid_deduction=unpaid_deduction,
+            holiday_premium=holiday_premium,
         )

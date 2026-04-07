@@ -68,6 +68,7 @@ class GrossBreakdown:
     leave_pay: Decimal = Decimal(0)          # pay added for leave-covered hours
     leave_half_pay_deduction: Decimal = Decimal(0)  # deduction for half-pay sick days
     leave_unpaid_deduction: Decimal = Decimal(0)    # deduction for unpaid leave days
+    holiday_premium: Decimal = Decimal(0)    # extra day's pay for working a public holiday
 
 
 @dataclass

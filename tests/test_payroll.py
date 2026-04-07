@@ -27,8 +27,8 @@ from src.calculators import (
     PAYECalculator,
     PayrollEngine,
 )
-from src.models import Contract, LeaveStock
-from src.rates import StatutoryRates
+from src.models import Contract, Employee, LeaveStock, TimesheetDay
+from src.rates import KenyanHolidays, StatutoryRates
 
 
 # =============================================================================
@@ -624,3 +624,222 @@ class TestPayrollEngineIntegration:
             assert payslip.net_pay < payslip.gross.total_gross
 
         assert len(payslips) == 10
+
+
+# =============================================================================
+# Synthetic: Worked Holiday Premium Tests
+# =============================================================================
+
+class TestWorkedHolidayPremium:
+    """
+    [SYNTHETIC] Test that working a public holiday earns an extra normal day's
+    pay on top of regular pay.
+
+    NOT EXTERNALLY VALIDATED - based on user-stated rule that public holidays
+    are paid regardless (built into the monthly base salary because the
+    monthly divisor excludes holiday dates), and working one earns an extra
+    normal day's pay.
+
+    Reference holidays used here:
+      March 2026 — Eid ul-Fitr (Mon, 30-Mar)
+      April 2026 — Good Friday (Fri, 3-Apr), Easter Monday (Mon, 6-Apr)
+    """
+
+    STATUTORY_DIVISOR = Decimal("225.333333")
+
+    @staticmethod
+    def _make_employee(emp_id: int = 1) -> Employee:
+        return Employee(
+            employee_id=emp_id, name="Holiday Test", national_id="",
+            kra_pin="", phone="", bank_account="", nssf_no="", shif_no="",
+        )
+
+    @staticmethod
+    def _make_leave_stock(emp_id: int = 1) -> LeaveStock:
+        return LeaveStock(
+            employee_id=emp_id,
+            sick_full_pay=Decimal("7"),
+            sick_half_pay=Decimal("7"),
+            annual_leave=Decimal("0"),
+            as_of_date=date(2026, 1, 31),
+        )
+
+    @staticmethod
+    def _make_fixed_monthly_contract(base: Decimal = Decimal("50000")) -> Contract:
+        return Contract(
+            employee_id=1,
+            contract_type="fixed_monthly",
+            base_salary=base,
+            weekly_hours=None,
+            housing_type="none",
+            housing_market_value=None,
+            nssf_tier="standard",
+            start_date=date(2025, 1, 1),
+            end_date=None,
+            status="active",
+            salary_basis="base",
+            hourly_divisor="monthly",
+        )
+
+    @staticmethod
+    def _make_hourly_contract(base: Decimal = Decimal("25000"), weekly_hours: int = 45) -> Contract:
+        return Contract(
+            employee_id=1,
+            contract_type="hourly",
+            base_salary=base,
+            weekly_hours=weekly_hours,
+            housing_type="none",
+            housing_market_value=None,
+            nssf_tier="standard",
+            start_date=date(2025, 1, 1),
+            end_date=None,
+            status="active",
+            salary_basis="base",
+            hourly_divisor="monthly",
+        )
+
+    @staticmethod
+    def _build_full_month_timesheet(
+        year: int, month: int, daily_hours: Decimal,
+        worked_holiday_dates: set | None = None,
+    ) -> list[TimesheetDay]:
+        """Build a timesheet with normal hours on every working day.
+
+        Public holidays are NOT worked unless their date is in worked_holiday_dates.
+        """
+        from calendar import monthrange
+        worked_holiday_dates = worked_holiday_dates or set()
+        holiday_dates = {h.date for h in KenyanHolidays.get_holidays_for_month(year, month)}
+        _, last = monthrange(year, month)
+        days = []
+        for day in range(1, last + 1):
+            d = date(year, month, day)
+            wd = d.weekday()  # Mon=0..Sun=6
+            is_weekend = wd >= 5
+            is_holiday = d in holiday_dates
+            if is_holiday:
+                hours = daily_hours if d in worked_holiday_dates else Decimal(0)
+            elif is_weekend:
+                continue
+            else:
+                hours = daily_hours
+            days.append(TimesheetDay(
+                employee_id=1, date=d,
+                hours_normal=hours,
+                hours_ot_1_5=Decimal(0),
+                hours_ot_2_0=Decimal(0),
+                absent=False, sick=False,
+            ))
+        return days
+
+    # ----- Helper-level (KenyanHolidays.count_worked_holidays) -----
+
+    def test_count_worked_holidays_none_worked(self):
+        days = self._build_full_month_timesheet(2026, 3, Decimal("8"))
+        assert KenyanHolidays.count_worked_holidays(2026, 3, days) == 0
+
+    def test_count_worked_holidays_one_worked(self):
+        days = self._build_full_month_timesheet(
+            2026, 3, Decimal("8"), {date(2026, 3, 30)}
+        )
+        assert KenyanHolidays.count_worked_holidays(2026, 3, days) == 1
+
+    def test_count_worked_holidays_multiple(self):
+        days = self._build_full_month_timesheet(
+            2026, 4, Decimal("8"),
+            {date(2026, 4, 3), date(2026, 4, 6)},
+        )
+        assert KenyanHolidays.count_worked_holidays(2026, 4, days) == 2
+
+    # ----- Fixed monthly engine integration -----
+
+    def test_fixed_monthly_no_holidays_in_month_no_premium(self):
+        """February 2026 has no public holidays — premium must be zero."""
+        engine = PayrollEngine(date(2026, 2, 28))
+        contract = self._make_fixed_monthly_contract()
+        days = self._build_full_month_timesheet(2026, 2, Decimal("8"))
+        payslip = engine.process(
+            self._make_employee(), contract, days, self._make_leave_stock()
+        )
+        assert payslip.gross.holiday_premium == Decimal(0)
+
+    def test_fixed_monthly_holiday_unworked_no_premium(self):
+        """Eid falls in March; if not worked, no premium."""
+        engine = PayrollEngine(date(2026, 3, 31))
+        contract = self._make_fixed_monthly_contract()
+        days = self._build_full_month_timesheet(2026, 3, Decimal("8"))
+        payslip = engine.process(
+            self._make_employee(), contract, days, self._make_leave_stock()
+        )
+        assert payslip.gross.holiday_premium == Decimal(0)
+        # Base salary still fully paid (holidays are paid days off)
+        assert payslip.gross.base_pay == Decimal("50000")
+
+    def test_fixed_monthly_holiday_worked_premium_one_day(self):
+        """Working Eid adds one normal day's pay (8h * base/225.33)."""
+        engine = PayrollEngine(date(2026, 3, 31))
+        contract = self._make_fixed_monthly_contract()
+        days = self._build_full_month_timesheet(
+            2026, 3, Decimal("8"), {date(2026, 3, 30)}
+        )
+        payslip = engine.process(
+            self._make_employee(), contract, days, self._make_leave_stock()
+        )
+        expected_premium = Decimal("8") * (Decimal("50000") / self.STATUTORY_DIVISOR)
+        assert payslip.gross.holiday_premium == pytest.approx(expected_premium, rel=Decimal("0.001"))
+
+    def test_fixed_monthly_two_holidays_worked(self):
+        """April 2026 has two holidays; working both doubles the premium."""
+        engine = PayrollEngine(date(2026, 4, 30))
+        contract = self._make_fixed_monthly_contract()
+        days = self._build_full_month_timesheet(
+            2026, 4, Decimal("8"),
+            {date(2026, 4, 3), date(2026, 4, 6)},
+        )
+        payslip = engine.process(
+            self._make_employee(), contract, days, self._make_leave_stock()
+        )
+        expected_premium = Decimal("2") * Decimal("8") * (Decimal("50000") / self.STATUTORY_DIVISOR)
+        assert payslip.gross.holiday_premium == pytest.approx(expected_premium, rel=Decimal("0.001"))
+        # And the premium should be reflected in total_gross above the no-premium baseline
+        days_no_holiday = self._build_full_month_timesheet(2026, 4, Decimal("8"))
+        baseline = engine.process(
+            self._make_employee(), contract, days_no_holiday, self._make_leave_stock()
+        )
+        assert payslip.gross.total_gross > baseline.gross.total_gross
+        diff = payslip.gross.total_gross - baseline.gross.total_gross
+        assert diff == pytest.approx(expected_premium, rel=Decimal("0.001"))
+
+    # ----- Hourly engine integration -----
+
+    def test_hourly_holiday_worked_premium(self):
+        """Hourly contract with 9h/day: premium = 9h * (25000/225.33) per day."""
+        engine = PayrollEngine(date(2026, 3, 31))
+        contract = self._make_hourly_contract()  # 25000, 45h/wk → daily=9h
+        days = self._build_full_month_timesheet(
+            2026, 3, Decimal("9"), {date(2026, 3, 30)}
+        )
+        payslip = engine.process(
+            self._make_employee(), contract, days, self._make_leave_stock()
+        )
+        expected_premium = Decimal("9") * (Decimal("25000") / self.STATUTORY_DIVISOR)
+        assert payslip.gross.holiday_premium == pytest.approx(expected_premium, rel=Decimal("0.001"))
+
+    def test_holiday_premium_appears_in_total_gross(self):
+        """The holiday premium must be included in total_gross."""
+        engine = PayrollEngine(date(2026, 3, 31))
+        contract = self._make_fixed_monthly_contract()
+        worked_days = self._build_full_month_timesheet(
+            2026, 3, Decimal("8"), {date(2026, 3, 30)}
+        )
+        unworked_days = self._build_full_month_timesheet(2026, 3, Decimal("8"))
+        with_premium = engine.process(
+            self._make_employee(), contract, worked_days, self._make_leave_stock()
+        )
+        without_premium = engine.process(
+            self._make_employee(), contract, unworked_days, self._make_leave_stock()
+        )
+        diff = with_premium.gross.total_gross - without_premium.gross.total_gross
+        # Allow tiny Decimal precision drift between recomputations
+        assert diff == pytest.approx(with_premium.gross.holiday_premium, abs=Decimal("0.00001"))
+        assert diff > Decimal(0)

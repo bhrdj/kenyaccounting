@@ -113,6 +113,18 @@ class KenyanHolidays:
         daily_hours = Decimal(weekly_hours) / Decimal(days_per_week)
         return working_days * daily_hours
 
+    @classmethod
+    def count_worked_holidays(cls, year: int, month: int, timesheet_days) -> int:
+        """
+        Count timesheet days that fall on a public holiday and have any
+        normal hours worked. Used to compute the worked-holiday premium.
+        """
+        holiday_dates = {h.date for h in cls.get_holidays_for_month(year, month)}
+        return sum(
+            1 for d in timesheet_days
+            if d.date in holiday_dates and d.hours_normal > 0
+        )
+
 
 class StatutoryRates:
     """Single source of truth for statutory constants. Date-aware for NSSF transitions."""

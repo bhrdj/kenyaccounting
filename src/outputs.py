@@ -44,7 +44,15 @@ class PayslipRenderer:
         ) if payslip.days_worked else []
         lines.append(f"Days worked:     {days_worked}")
         if holidays:
-            lines.append(f"Public holidays: {len(holidays)}  ({', '.join(h.name for h in holidays)})")
+            holiday_dates = {h.date for h in holidays}
+            worked_holidays = sum(
+                1 for d in payslip.days_worked
+                if d.date in holiday_dates and d.hours_normal > 0
+            )
+            holiday_line = f"Public holidays: {len(holidays)}  ({', '.join(h.name for h in holidays)})"
+            if worked_holidays:
+                holiday_line += f" — worked {worked_holidays}"
+            lines.append(holiday_line)
         lines.append(f"Normal hours:    {total_normal:.2f}")
         if total_ot_1_5 > 0:
             lines.append(f"Overtime @1.5x:  {total_ot_1_5}")
@@ -66,6 +74,8 @@ class PayslipRenderer:
             lines.append(f"  Overtime @1.5x        KES {payslip.gross.overtime_1_5:>12,.2f}")
         if payslip.gross.overtime_2_0 > 0:
             lines.append(f"  Overtime @2.0x        KES {payslip.gross.overtime_2_0:>12,.2f}")
+        if payslip.gross.holiday_premium > 0:
+            lines.append(f"  Holiday premium       KES {payslip.gross.holiday_premium:>12,.2f}")
         if payslip.gross.housing_allowance > 0:
             lines.append(f"  Housing allowance     KES {payslip.gross.housing_allowance:>12,.2f}")
         if payslip.gross.leave_half_pay_deduction > 0:
