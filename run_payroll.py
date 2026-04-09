@@ -19,7 +19,7 @@ from src.models import LeaveStock
 from src.outputs import PayslipRenderer, save_payroll_outputs
 
 
-INPUTS_DIR = Path("../el/payroll/inputs")
+INPUTS_DIR = Path("../el/payroll/working")
 TIMESHEETS_DIR = INPUTS_DIR / "timesheets"
 OUTPUT_DIR = Path("../el/payroll/outputs")
 COMPANY_NAME = "B'aida Daycare & Learning Centre"
@@ -52,18 +52,21 @@ def main():
     if leave_path:
         print(f"Leave stocks from: {leave_path.name}")
 
-    # Load timesheets: try per-employee folder first, fall back to flat file
-    ts_folder = TIMESHEETS_DIR / str(year)
+    # Load timesheets: try per-month folder, then per-year folder, then flat file
+    ts_month_folder = TIMESHEETS_DIR / f"{year}_{month:02d}"
+    ts_year_folder = TIMESHEETS_DIR / str(year)
     ts_flat = TIMESHEETS_DIR / f"{year}_{month:02d}.tsv"
-    if ts_folder.is_dir():
-        timesheets = load_timesheet_folder(ts_folder, year, month)
+    if ts_month_folder.is_dir():
+        timesheets = load_timesheet_folder(ts_month_folder, year, month)
+    elif ts_year_folder.is_dir():
+        timesheets = load_timesheet_folder(ts_year_folder, year, month)
     elif ts_flat.exists():
         ts_entries = load_timesheet(ts_flat)
         timesheets = {}
         for entry in ts_entries:
             timesheets.setdefault(entry.employee_id, []).append(entry)
     else:
-        print(f"No timesheets found at {ts_folder} or {ts_flat}")
+        print(f"No timesheets found at {ts_month_folder}, {ts_year_folder}, or {ts_flat}")
         return 1
 
     print(f"Loaded timesheets for {len(timesheets)} employees")
