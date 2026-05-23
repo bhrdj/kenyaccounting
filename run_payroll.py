@@ -16,7 +16,7 @@ from pathlib import Path
 from src.calculators import PayrollEngine
 from src.loaders import load_contracts, load_employees, load_leave_stocks, load_timesheet, load_timesheet_folder, find_leave_stocks_for_month
 from src.models import LeaveStock
-from src.outputs import PayslipRenderer, save_payroll_outputs
+from src.outputs import PayslipRenderer, save_payroll_outputs, save_leave_stocks
 
 
 INPUTS_DIR = Path("../el/payroll/working")
@@ -153,6 +153,8 @@ def main():
     if payslips and not args.no_save:
         written = save_payroll_outputs(payslips, year, month, OUTPUT_DIR, COMPANY_NAME)
         print(f"\nSaved {len(written)} files to {OUTPUT_DIR / f'{year}_{month:02d}'}")
+        leave_dest = save_leave_stocks(payslips, year, month, INPUTS_DIR)
+        print(f"Updated leave stocks: {leave_dest}")
 
     if skipped:
         print()
