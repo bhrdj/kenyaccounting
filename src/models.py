@@ -13,15 +13,17 @@ class Employee:
     kra_pin: str
     phone: str
     bank_account: str
+    nssf_no: str = ""
+    shif_no: str = ""
 
 
 @dataclass
 class Contract:
     employee_id: int
-    contract_type: str  # 'hourly', 'fixed_monthly', 'prorated_min_wage'
+    contract_type: str  # 'hourly', 'fixed_monthly', 'prorated_min_wage', 'consolidated_leave'
     base_salary: Decimal  # Interpreted based on salary_basis
     weekly_hours: int | None  # None for fixed_monthly
-    housing_type: str  # 'none', 'quarters', 'allowance'
+    housing_type: str  # 'none', 'quarters', 'dorm', 'allowance'
     housing_market_value: Decimal | None  # For 'quarters' only
     nssf_tier: str  # 'standard', 'contracted_out'
     start_date: date
@@ -34,9 +36,9 @@ class Contract:
 @dataclass
 class LeaveStock:
     employee_id: int
-    sick_full_pay: int  # days remaining
-    sick_half_pay: int
-    annual_leave: int
+    sick_full_pay: Decimal  # days remaining (can be fractional)
+    sick_half_pay: Decimal
+    annual_leave: Decimal
     as_of_date: date
 
 
@@ -55,12 +57,18 @@ class TimesheetDay:
 
 @dataclass
 class GrossBreakdown:
-    base_pay: Decimal
+    base_pay: Decimal              # actual earned base (hours worked + leave pay)
     overtime_1_5: Decimal
     overtime_2_0: Decimal
-    housing_allowance: Decimal  # cash housing allowance (15% of base, part of gross)
-    housing_benefit: Decimal  # taxable value of quarters (non-cash benefit)
-    total_gross: Decimal  # base_pay + overtime + housing_allowance
+    housing_allowance: Decimal     # cash housing allowance (15% of base, part of gross)
+    housing_benefit: Decimal       # taxable value of quarters (non-cash benefit)
+    total_gross: Decimal           # base_pay + overtime + housing_allowance - leave deductions
+    baseline_base_pay: Decimal = Decimal(0)  # full-time monthly salary from contract
+    worked_base_pay: Decimal = Decimal(0)    # pay from hours actually worked (before leave pay)
+    leave_pay: Decimal = Decimal(0)          # pay added for leave-covered hours
+    leave_half_pay_deduction: Decimal = Decimal(0)  # deduction for half-pay sick days
+    leave_unpaid_deduction: Decimal = Decimal(0)    # deduction for unpaid leave days
+    holiday_premium: Decimal = Decimal(0)    # extra day's pay for working a public holiday
 
 
 @dataclass
@@ -75,10 +83,10 @@ class Deductions:
 
 @dataclass
 class LeaveAllocation:
-    sick_full_pay_used: int
-    sick_half_pay_used: int
-    annual_leave_used: int
-    unpaid_days: int
+    sick_full_pay_used: Decimal  # hours
+    sick_half_pay_used: Decimal  # hours
+    annual_leave_used: Decimal  # hours
+    unpaid_hours: Decimal  # hours
     updated_stock: LeaveStock
 
 

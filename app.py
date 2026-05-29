@@ -1,9 +1,15 @@
 import streamlit as st
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
-from src.loaders import load_employees, load_contracts, load_leave_stocks, load_timesheet
+from src.loaders import (
+    load_employees, load_contracts, load_leave_stocks, load_timesheet,
+    load_timesheet_folder, validate_input_folder, find_file, find_timesheet_dir,
+    find_leave_stocks_for_month,
+)
 from src.calculators import PayrollEngine
+from src.models import LeaveStock
 from src.rates import KenyanHolidays
 from src.outputs import (
     PayslipRenderer,
@@ -11,6 +17,9 @@ from src.outputs import (
     KRAReturnGenerator,
     NSSFReturnGenerator,
     SHAReturnGenerator,
+    save_payroll_outputs,
+    save_leave_stocks,
+    upload_leave_stocks_to_gsheet,
 )
 
 st.set_page_config(page_title="KenyAccounting", page_icon="📊", layout="wide")
@@ -19,11 +28,28 @@ st.title("KenyAccounting")
 st.caption("Kenyan Payroll & Statutory Deductions")
 
 
-# Sidebar for data paths
-st.sidebar.header("Data Files")
+# Sidebar: input folder
+st.sidebar.header("Input Folder")
+input_folder = st.sidebar.text_input(
+    "Paste folder path containing payroll files",
+    value=st.session_state.get("input_folder", ""),
+    help="Folder with master_employees.tsv, contracts.tsv, leave_stocks/ dir, and a year subfolder of timesheets",
+)
+st.session_state["input_folder"] = input_folder
 
-data_dir = st.sidebar.text_input("Data directory", value="tests/fixtures")
-timesheet_dir = st.sidebar.text_input("Timesheets directory", value="tests/fixtures/test_timesheets")
+# Validate folder
+folder_valid = False
+if input_folder:
+    folder_path = Path(input_folder)
+    is_valid, messages = validate_input_folder(folder_path)
+    for msg in messages:
+        if is_valid:
+            st.sidebar.success(msg) if msg.startswith("Valid") else st.sidebar.info(msg)
+        else:
+            st.sidebar.error(msg)
+    folder_valid = is_valid
+else:
+    st.sidebar.info("Enter a folder path to begin")
 
 # Select payroll month
 st.sidebar.header("Payroll Period")
@@ -44,39 +70,53 @@ if holidays:
 
 
 @st.cache_data
-def load_data(data_dir, timesheet_dir, year, month):
-    data_path = Path(data_dir)
-    ts_path = Path(timesheet_dir)
+def load_data(folder_str, year, month):
+    folder = Path(folder_str)
 
-    employees = {e.employee_id: e for e in load_employees(data_path / "test_employees.tsv")}
-    contracts = {c.employee_id: c for c in load_contracts(data_path / "test_contracts.tsv")}
-    leave_stocks = {l.employee_id: l for l in load_leave_stocks(data_path / "test_leave_stocks.tsv")}
+    emp_path = find_file(folder, "master_employees.tsv")
+    con_path = find_file(folder, "contracts.tsv")
+    leave_path = find_leave_stocks_for_month(folder, year, month)
 
-    # Try to load timesheet for the selected month
-    ts_file = ts_path / f"{year}_{month:02d}.tsv"
-    if ts_file.exists():
-        ts_entries = load_timesheet(ts_file)
-        timesheet = {}
-        for entry in ts_entries:
-            if entry.employee_id not in timesheet:
-                timesheet[entry.employee_id] = []
-            timesheet[entry.employee_id].append(entry)
+    employees = {e.employee_id: e for e in load_employees(emp_path)}
+    contracts = {c.employee_id: c for c in load_contracts(con_path)}
+    leave_stocks = {l.employee_id: l for l in load_leave_stocks(leave_path)} if leave_path else {}
+
+    # Load per-employee timesheets from year subfolder
+    ts_dir = find_timesheet_dir(folder, year)
+    if ts_dir:
+        timesheet = load_timesheet_folder(ts_dir, year, month)
+        ts_exists = len(timesheet) > 0
     else:
         timesheet = {}
+        ts_exists = False
 
-    return employees, contracts, leave_stocks, timesheet, ts_file.exists()
+    # Fill in default leave stocks for employees without records
+    for emp_id in contracts:
+        if emp_id not in leave_stocks:
+            leave_stocks[emp_id] = LeaveStock(
+                employee_id=emp_id,
+                sick_full_pay=Decimal("7"),
+                sick_half_pay=Decimal("7"),
+                annual_leave=Decimal("0"),
+                as_of_date=date(2025, 12, 31),
+            )
 
+    return employees, contracts, leave_stocks, timesheet, ts_exists
+
+
+if not folder_valid:
+    st.info("Enter a valid input folder path in the sidebar to begin.")
+    st.stop()
 
 # Load data
 try:
-    employees, contracts, leave_stocks, timesheet, ts_exists = load_data(data_dir, timesheet_dir, year, month)
+    employees, contracts, leave_stocks, timesheet, ts_exists = load_data(input_folder, year, month)
 except Exception as e:
     st.error(f"Error loading data: {e}")
     st.stop()
 
-
 if not ts_exists:
-    st.warning(f"No timesheet found for {payroll_date.strftime('%B %Y')}. Expected file: {timesheet_dir}/{year}_{month:02d}.tsv")
+    st.warning(f"No timesheet data found for {payroll_date.strftime('%B %Y')} in the input folder.")
     st.stop()
 
 
@@ -85,8 +125,8 @@ if st.sidebar.button("Run Payroll", type="primary"):
     engine = PayrollEngine(payroll_date)
     payslips = []
 
-    for emp_id in sorted(employees.keys()):
-        if emp_id in timesheet:
+    for emp_id in sorted(contracts.keys()):
+        if emp_id in timesheet and emp_id in employees and emp_id in leave_stocks:
             payslip = engine.process(
                 employees[emp_id],
                 contracts[emp_id],
@@ -124,7 +164,7 @@ if "payslips" in st.session_state:
     tab1, tab2, tab3 = st.tabs(["Payslips", "Summary Table", "Downloads"])
 
     with tab1:
-        renderer = PayslipRenderer()
+        renderer = PayslipRenderer(company_name="B'aida Daycare & Learning Centre")
         for ps in payslips:
             with st.expander(f"{ps.employee.name} - Net: KES {ps.net_pay:,.2f}"):
                 st.code(renderer.render(ps), language=None)
@@ -169,6 +209,15 @@ if "payslips" in st.session_state:
         col1, col2 = st.columns(2)
 
         with col1:
+            # All payslips PDF
+            pdf_renderer = PayslipRenderer(company_name="B'aida Daycare & Learning Centre")
+            st.download_button(
+                "Download All Payslips (PDF)",
+                pdf_renderer.render_all_pdf(payslips),
+                file_name=f"payslips_{year}_{month:02d}.pdf",
+                mime="application/pdf",
+            )
+
             # Bank file
             bank_gen = BankFileGenerator(payslips)
             st.download_button(
@@ -206,13 +255,53 @@ if "payslips" in st.session_state:
                 mime="text/csv",
             )
 
+        st.divider()
+
+        # Save outputs to a subfolder next to the input folder
+        output_dir = Path(input_folder) / "outputs"
+        company_name = "B'aida Daycare & Learning Centre"
+        if st.button(f"Save to {output_dir}"):
+            written = save_payroll_outputs(payslips, year, month, output_dir, company_name)
+            st.success(f"Saved {len(written)} files to {output_dir / f'{year}_{month:02d}'}")
+
+        st.divider()
+
+        # Save updated leave stocks for next month's payroll
+        st.subheader("Update Leave Stocks")
+        from calendar import monthrange
+        _, last_day = monthrange(year, month)
+        leave_filename = f"leave_stocks_{year}_{month:02d}_{last_day:02d}.tsv"
+        tab_name = f"{year}_{month:02d}_{last_day:02d}"
+        leave_dest = Path(input_folder) / "leave_stocks" / str(year) / leave_filename
+        exists_local = leave_dest.exists()
+
+        col_ls1, col_ls2 = st.columns(2)
+
+        with col_ls1:
+            label = f"{'Replace' if exists_local else 'Save'} {leave_filename}"
+            if exists_local:
+                st.caption(f"Existing file: {leave_dest}")
+            if st.button(label):
+                dest = save_leave_stocks(payslips, year, month, Path(input_folder))
+                st.success(f"{'Replaced' if exists_local else 'Saved'}: {dest}")
+
+        with col_ls2:
+            sheet_name = f"leave_stocks_{year}"
+            if st.button(f"Upload tab '{tab_name}' to {sheet_name}"):
+                try:
+                    written_tab = upload_leave_stocks_to_gsheet(payslips, year, month)
+                    st.success(f"Uploaded tab '{written_tab}' to {sheet_name}")
+                except Exception as e:
+                    st.error(f"Google Sheets upload failed: {e}")
+
 else:
     st.info("Click 'Run Payroll' in the sidebar to generate payslips.")
 
     # Show loaded employees
     st.subheader("Loaded Employees")
     for emp_id in sorted(employees.keys()):
-        emp = employees[emp_id]
-        contract = contracts[emp_id]
-        has_ts = emp_id in timesheet
-        st.write(f"- {emp.name} ({contract.contract_type}) {'✓' if has_ts else '✗ no timesheet'}")
+        if emp_id in contracts:
+            emp = employees[emp_id]
+            contract = contracts[emp_id]
+            has_ts = emp_id in timesheet
+            st.write(f"- {emp.name} ({contract.contract_type}) {'✓' if has_ts else '✗ no timesheet'}")

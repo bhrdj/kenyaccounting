@@ -208,3 +208,5 @@ __marimo__/
 
 # Project-specific
 TODOS.md
+data/
+data_gitignored/
