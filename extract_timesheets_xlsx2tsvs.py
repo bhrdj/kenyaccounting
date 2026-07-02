@@ -3,7 +3,7 @@
 
 Reads ../el/payroll/inputs/timesheets/AttendanceYYYY.xlsx (one tab per
 employee, named like Beth_1) and writes one TSV per tab into
-../el/payroll/working/timesheets/YYYY_MM/, filtered to the requested month.
+../el/payroll/inputs/timesheets/YYYY_MM/, filtered to the requested month.
 The tab name becomes the TSV filename. The TSV columns match what
 src.loaders.load_timesheet_folder expects.
 
@@ -22,7 +22,7 @@ import openpyxl
 
 
 INPUTS_DIR = Path("../el/payroll/inputs/timesheets")
-WORKING_DIR = Path("../el/payroll/working/timesheets")
+OUTPUT_DIR = Path("../el/payroll/inputs/timesheets")
 
 HEADER = [
     "date", "wkdy", "hrs_norm", "hrs_wrkd",
@@ -57,6 +57,9 @@ def extract_month(xlsx_path: Path, dest_dir: Path, year: int, month: int) -> int
     """
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     dest_dir.mkdir(parents=True, exist_ok=True)
+    # Clear any stale TSVs from prior runs (e.g. renamed sheets)
+    for stale in dest_dir.glob("*.tsv"):
+        stale.unlink()
 
     written = 0
     for sheet_name in wb.sheetnames:
@@ -101,7 +104,7 @@ def main():
         print(f"Source not found: {xlsx_path}", file=sys.stderr)
         return 1
 
-    dest_dir = WORKING_DIR / f"{args.year}_{args.month:02d}"
+    dest_dir = OUTPUT_DIR / f"{args.year}_{args.month:02d}"
     print(f"Extracting {args.year}-{args.month:02d} from {xlsx_path}")
     print(f"Writing to {dest_dir}")
     print()

@@ -7,6 +7,31 @@ from pathlib import Path
 from .models import Contract, Employee, LeaveStock, TimesheetDay
 
 
+def _employee_from_row(row: dict) -> Employee | None:
+    """Build an Employee from a mapping of column name -> value.
+
+    Returns None for rows that should be skipped (missing/placeholder
+    employee_id). Shared by the TSV and Google Sheets loaders.
+    """
+    emp_id_raw = str(row.get("employee_id", "") or "").strip()
+    if not emp_id_raw or emp_id_raw == "???":
+        return None
+
+    def g(key):
+        return str(row.get(key, "") or "").strip()
+
+    return Employee(
+        employee_id=int(emp_id_raw),
+        name=g("name"),
+        national_id=g("national_id"),
+        kra_pin=g("kra_pin"),
+        phone=g("phone"),
+        bank_account=g("bank_account"),
+        nssf_no=g("nssf_no"),
+        shif_no=g("shif_no"),
+    )
+
+
 def load_employees(path: str | Path) -> list[Employee]:
     """Load employees from a TSV file.
 
@@ -18,25 +43,47 @@ def load_employees(path: str | Path) -> list[Employee]:
     with open(path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f, delimiter="\t")
         for row in reader:
-            emp_id_raw = row.get("employee_id", "").strip()
-            national_id = row.get("national_id", "").strip()
+            emp = _employee_from_row(row)
+            if emp is not None:
+                employees.append(emp)
+    return employees
 
-            # Skip rows with missing employee_id
-            if not emp_id_raw or emp_id_raw == "???":
-                continue
 
-            employees.append(
-                Employee(
-                    employee_id=int(emp_id_raw),
-                    name=row.get("name", "").strip(),
-                    national_id=national_id,
-                    kra_pin=row.get("kra_pin", "").strip(),
-                    phone=row.get("phone", "").strip(),
-                    bank_account=row.get("bank_account", "").strip(),
-                    nssf_no=row.get("nssf_no", "").strip(),
-                    shif_no=row.get("shif_no", "").strip(),
-                )
-            )
+# Google Sheets credentials (shared with src.outputs upload path)
+GSPREAD_CREDS = Path.home() / ".config/google/everyday_creds.json"
+GSPREAD_TOKEN = Path.home() / ".config/google/gspread_authorized_user.json"
+
+
+def load_employees_from_gsheet(
+    key: str, worksheet: str | None = None
+) -> list[Employee]:
+    """Load employees from a Google Sheets spreadsheet by key.
+
+    `key` is the spreadsheet ID from its URL
+    (docs.google.com/spreadsheets/d/<key>/edit). `worksheet` selects a tab
+    by title; the first tab is used when omitted. The header row supplies
+    column names, matching the TSV layout used by load_employees.
+    """
+    import gspread
+
+    gc = gspread.oauth(
+        credentials_filename=str(GSPREAD_CREDS),
+        authorized_user_filename=str(GSPREAD_TOKEN),
+    )
+    sh = gc.open_by_key(key)
+    ws = sh.worksheet(worksheet) if worksheet else sh.sheet1
+
+    values = ws.get_all_values()
+    if not values:
+        return []
+
+    header = [h.strip() for h in values[0]]
+    employees = []
+    for raw in values[1:]:
+        row = dict(zip(header, raw))
+        emp = _employee_from_row(row)
+        if emp is not None:
+            employees.append(emp)
     return employees
 
 

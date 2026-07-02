@@ -123,7 +123,8 @@ class GrossCalculator:
         )
 
     def _calc_fixed_monthly(self) -> GrossBreakdown:
-        # For fixed monthly, base_salary is interpreted based on salary_basis
+        # base_salary is interpreted per salary_basis. Holiday premium and
+        # other monthly adjustments are applied later in _apply_monthly_adjustments.
         actual_base, housing_allowance, total_gross = self._compute_housing(self.contract.base_salary)
 
         return GrossBreakdown(
@@ -199,6 +200,8 @@ class LeaveCalculator:
     SICK_HALF_PAY_ACCRUAL = Decimal("0.583333")  # 7 / 12
 
     def allocate(self) -> LeaveAllocation:
+        from .rates import KenyanHolidays
+
         sick_full_used = Decimal(0)  # hours
         sick_half_used = Decimal(0)  # hours
         annual_used = Decimal(0)  # hours
@@ -211,8 +214,35 @@ class LeaveCalculator:
         annual_accrual = Decimal(0) if self.contract.contract_type == "consolidated_leave" else self.ANNUAL_LEAVE_ACCRUAL
         remaining_annual = self.leave_stock.annual_leave + annual_accrual
 
+        # Public holidays are paid regardless — absences on those days
+        # don't deplete sick/annual leave.
+        holiday_dates = set()
+        for day in self.timesheet_days:
+            holiday_dates.update(
+                h.date for h in KenyanHolidays.get_holidays_for_month(day.date.year, day.date.month)
+            )
+
+        # consolidated_leave: the off-week is baked into the contract salary,
+        # so absences don't deplete any leave stock or unpaid hours.
+        if self.contract.contract_type == "consolidated_leave":
+            return LeaveAllocation(
+                sick_full_pay_used=Decimal(0),
+                sick_half_pay_used=Decimal(0),
+                annual_leave_used=Decimal(0),
+                unpaid_hours=Decimal(0),
+                updated_stock=LeaveStock(
+                    employee_id=self.leave_stock.employee_id,
+                    sick_full_pay=remaining_sick_full,
+                    sick_half_pay=remaining_sick_half,
+                    annual_leave=remaining_annual,
+                    as_of_date=self.leave_stock.as_of_date,
+                ),
+            )
+
         for day in self.timesheet_days:
             if not day.absent:
+                continue
+            if day.date in holiday_dates:
                 continue
 
             # Absent hours = daily_hours minus any hours actually worked

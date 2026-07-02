@@ -374,10 +374,12 @@ def upload_leave_stocks_to_gsheet(
     """Upload updated leave stocks as a tab in a Google Sheets spreadsheet.
 
     Creates the tab if it doesn't exist, or clears and replaces if it does.
-    Tab name is YYYY_MM_DD (end of payroll month).
+    Tab name is YYYY_MM_DD (end of payroll month). Raises RuntimeError if a
+    later-month tab already exists (refuses to overwrite history).
     Returns the tab name written.
     """
     import gspread
+    import re
 
     _, last_day = monthrange(year, month)
     tab_name = f"{year}_{month:02d}_{last_day:02d}"
@@ -388,7 +390,26 @@ def upload_leave_stocks_to_gsheet(
         credentials_filename=str(GSPREAD_CREDS),
         authorized_user_filename=str(GSPREAD_TOKEN),
     )
-    sh = gc.open(spreadsheet_name)
+    try:
+        sh = gc.open(spreadsheet_name)
+    except gspread.SpreadsheetNotFound:
+        sh = gc.create(spreadsheet_name)
+        print(f"Created spreadsheet '{spreadsheet_name}' at {sh.url}")
+
+    # Guard: refuse to write if a later month is already published.
+    pat = re.compile(r"^(\d{4})_(\d{2})_(\d{2})$")
+    later = []
+    for ws in sh.worksheets():
+        m = pat.match(ws.title)
+        if not m:
+            continue
+        if (int(m[1]), int(m[2])) > (year, month):
+            later.append(ws.title)
+    if later:
+        raise RuntimeError(
+            f"Refusing to write {tab_name}: later month tab(s) already exist: "
+            f"{sorted(later)}. Only the most recent month may be (over)written."
+        )
 
     # Build rows from payslips
     header = ["employee_id", "name", "sick_full_pay", "sick_half_pay",
@@ -520,3 +541,145 @@ def save_payroll_outputs(
     written.append(summary_path)
 
     return written
+
+
+# Parent Google Drive folder that holds one subfolder per payroll month
+GDRIVE_OUTPUTS_FOLDER_ID = "1mnsSmqixV3OW5bRSjqGtjDVWmNKtNkTy"
+
+_DRIVE_API = "https://www.googleapis.com/drive/v3"
+_DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
+
+
+def _drive_session():
+    """Authorized requests session reusing the gspread OAuth token.
+
+    The token already carries the full drive scope, so no extra auth flow
+    is needed. google-auth ships with gspread, so no new dependency.
+    """
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import AuthorizedSession
+
+    creds = Credentials.from_authorized_user_file(str(GSPREAD_TOKEN))
+    return AuthorizedSession(creds)
+
+
+def _drive_find_child(session, parent_id: str, name: str, folder: bool = False):
+    """Return the id of a non-trashed child named `name` under parent, or None."""
+    safe = name.replace("'", "\\'")
+    q = f"name = '{safe}' and '{parent_id}' in parents and trashed = false"
+    if folder:
+        q += " and mimeType = 'application/vnd.google-apps.folder'"
+    params = {
+        "q": q, "fields": "files(id,name)", "spaces": "drive",
+        "supportsAllDrives": "true", "includeItemsFromAllDrives": "true",
+    }
+    r = session.get(f"{_DRIVE_API}/files", params=params)
+    r.raise_for_status()
+    files = r.json().get("files", [])
+    return files[0]["id"] if files else None
+
+
+def _drive_get_or_create_folder(session, parent_id: str, name: str) -> str:
+    fid = _drive_find_child(session, parent_id, name, folder=True)
+    if fid:
+        return fid
+    meta = {"name": name, "mimeType": "application/vnd.google-apps.folder",
+            "parents": [parent_id]}
+    r = session.post(f"{_DRIVE_API}/files",
+                     params={"supportsAllDrives": "true", "fields": "id"},
+                     json=meta)
+    r.raise_for_status()
+    return r.json()["id"]
+
+
+def _drive_list_children(session, parent_id: str) -> dict[str, str]:
+    """Map name -> id for all non-trashed children of a folder (one API call)."""
+    out: dict[str, str] = {}
+    page_token = None
+    while True:
+        params = {
+            "q": f"'{parent_id}' in parents and trashed = false",
+            "fields": "nextPageToken, files(id,name)", "spaces": "drive",
+            "pageSize": 1000, "supportsAllDrives": "true",
+            "includeItemsFromAllDrives": "true",
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        r = session.get(f"{_DRIVE_API}/files", params=params)
+        r.raise_for_status()
+        j = r.json()
+        for f in j.get("files", []):
+            out[f["name"]] = f["id"]
+        page_token = j.get("nextPageToken")
+        if not page_token:
+            return out
+
+
+def _drive_upload_file(session, parent_id: str, path: Path,
+                       existing_id: str | None = None) -> None:
+    """Create or overwrite a file named path.name under parent_id.
+
+    New files use a single multipart request (metadata + bytes); existing
+    files are overwritten in place with a media update.
+    """
+    import json
+    import mimetypes
+
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    data = path.read_bytes()
+    if existing_id:
+        r = session.patch(
+            f"{_DRIVE_UPLOAD}/{existing_id}",
+            params={"uploadType": "media", "supportsAllDrives": "true"},
+            headers={"Content-Type": mime}, data=data)
+        r.raise_for_status()
+        return
+
+    boundary = "kenyacc_boundary_7f3a2b"
+    meta = json.dumps({"name": path.name, "parents": [parent_id]})
+    body = (
+        f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
+        f"{meta}\r\n--{boundary}\r\nContent-Type: {mime}\r\n\r\n"
+    ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
+    r = session.post(
+        _DRIVE_UPLOAD,
+        params={"uploadType": "multipart", "supportsAllDrives": "true", "fields": "id"},
+        headers={"Content-Type": f"multipart/related; boundary={boundary}"},
+        data=body)
+    r.raise_for_status()
+
+
+def _drive_upload_dir(session, local_dir: Path, parent_id: str) -> int:
+    """Recursively upload a local directory's contents into a Drive folder."""
+    existing = _drive_list_children(session, parent_id)
+    count = 0
+    for entry in sorted(local_dir.iterdir()):
+        if entry.is_dir():
+            sub_id = existing.get(entry.name) or _drive_get_or_create_folder(
+                session, parent_id, entry.name)
+            count += _drive_upload_dir(session, entry, sub_id)
+        else:
+            _drive_upload_file(session, parent_id, entry, existing.get(entry.name))
+            count += 1
+    return count
+
+
+def upload_payroll_outputs_to_gdrive(
+    year: int, month: int, output_dir: str | Path,
+    parent_folder_id: str = GDRIVE_OUTPUTS_FOLDER_ID,
+) -> tuple[str, int]:
+    """Upload outputs/YYYY_MM/ into a same-named subfolder on Google Drive.
+
+    Creates the YYYY_MM subfolder under parent_folder_id if it doesn't exist,
+    then uploads every file (recursing into subfolders like payslips/),
+    overwriting files that already exist. Returns (folder_url, num_files).
+    """
+    local = Path(output_dir) / f"{year}_{month:02d}"
+    if not local.is_dir():
+        raise FileNotFoundError(f"No output folder to upload: {local}")
+
+    session = _drive_session()
+    sub_name = f"Payroll_Archive_{year}_{month:02d}"
+    sub_id = _drive_get_or_create_folder(session, parent_folder_id, sub_name)
+    n = _drive_upload_dir(session, local, sub_id)
+    return f"https://drive.google.com/drive/folders/{sub_id}", n

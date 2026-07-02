@@ -48,7 +48,7 @@ class KenyanHolidays:
             (4, 3, "Good Friday", False),
             (4, 6, "Easter Monday", False),
             (3, 30, "Eid ul-Fitr", True),  # Estimated
-            (6, 6, "Eid ul-Adha", True),   # Estimated
+            (5, 27, "Eid ul-Adha", False),
         ],
         2027: [
             (3, 26, "Good Friday", False),
