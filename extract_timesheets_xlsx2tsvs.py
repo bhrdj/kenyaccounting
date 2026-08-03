@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Extract per-employee timesheets for a given month from the attendance xlsx.
 
-Reads ../el/payroll/inputs/timesheets/AttendanceYYYY.xlsx (one tab per
-employee, named like Beth_1) and writes one TSV per tab into
-../el/payroll/inputs/timesheets/YYYY_MM/, filtered to the requested month.
-The tab name becomes the TSV filename. The TSV columns match what
-src.loaders.load_timesheet_folder expects.
+Reads an AttendanceYYYY.xlsx (one tab per employee, named like Beth_1) and
+writes one TSV per tab into a destination directory, filtered to the
+requested month. The tab name becomes the TSV filename. The TSV columns
+match what src.loaders.load_timesheet_folder expects.
+
+run_payroll.py calls extract_month() directly against its temp workdir; the
+CLI below is for inspecting a downloaded workbook by hand.
 
 Usage:
-    python extract_timesheets.py                   # March 2026 (default)
-    python extract_timesheets.py --year 2026 --month 4
+    python extract_timesheets_xlsx2tsvs.py --xlsx Attendance2026.xlsx \\
+        --dest ./ts_2026_04 --year 2026 --month 4
 """
 
 import argparse
@@ -20,9 +22,6 @@ from pathlib import Path
 
 import openpyxl
 
-
-INPUTS_DIR = Path("../el/payroll/inputs/timesheets")
-OUTPUT_DIR = Path("../el/payroll/inputs/timesheets")
 
 HEADER = [
     "date", "wkdy", "hrs_norm", "hrs_wrkd",
@@ -50,7 +49,8 @@ def _fmt_num(v):
     return str(v)
 
 
-def extract_month(xlsx_path: Path, dest_dir: Path, year: int, month: int) -> int:
+def extract_month(xlsx_path: Path, dest_dir: Path, year: int, month: int,
+                  log=print) -> int:
     """Extract one TSV per worksheet, filtered to the given year/month.
 
     Returns the number of TSV files written.
@@ -88,23 +88,27 @@ def extract_month(xlsx_path: Path, dest_dir: Path, year: int, month: int) -> int
             writer.writerow(HEADER)
             writer.writerows(rows)
         written += 1
-        print(f"  {sheet_name}.tsv: {len(rows)} rows")
+        log(f"  {sheet_name}.tsv: {len(rows)} rows")
 
     return written
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--xlsx", type=Path, required=True,
+                        help="Path to AttendanceYYYY.xlsx")
+    parser.add_argument("--dest", type=Path, required=True,
+                        help="Directory to write per-employee TSVs into")
     parser.add_argument("--year", type=int, default=2026)
     parser.add_argument("--month", type=int, default=3)
     args = parser.parse_args()
 
-    xlsx_path = INPUTS_DIR / f"Attendance{args.year}.xlsx"
+    xlsx_path = args.xlsx
     if not xlsx_path.is_file():
         print(f"Source not found: {xlsx_path}", file=sys.stderr)
         return 1
 
-    dest_dir = OUTPUT_DIR / f"{args.year}_{args.month:02d}"
+    dest_dir = args.dest
     print(f"Extracting {args.year}-{args.month:02d} from {xlsx_path}")
     print(f"Writing to {dest_dir}")
     print()

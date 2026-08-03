@@ -664,6 +664,34 @@ def _drive_upload_dir(session, local_dir: Path, parent_id: str) -> int:
     return count
 
 
+def _archive_folder_name(year: int, month: int) -> str:
+    return f"Payroll_Archive_{year}_{month:02d}"
+
+
+def download_archived_file(
+    year: int, month: int, filename: str,
+    parent_folder_id: str = GDRIVE_OUTPUTS_FOLDER_ID,
+) -> bytes:
+    """Fetch one file's bytes from a month's Drive archive folder.
+
+    Raises FileNotFoundError if the month folder or the file is absent.
+    """
+    session = _drive_session()
+    sub_name = _archive_folder_name(year, month)
+    sub_id = _drive_find_child(session, parent_folder_id, sub_name, folder=True)
+    if not sub_id:
+        raise FileNotFoundError(f"No Drive archive folder '{sub_name}'")
+
+    file_id = _drive_find_child(session, sub_id, filename)
+    if not file_id:
+        raise FileNotFoundError(f"'{filename}' not found in Drive folder '{sub_name}'")
+
+    r = session.get(f"{_DRIVE_API}/files/{file_id}",
+                    params={"alt": "media", "supportsAllDrives": "true"})
+    r.raise_for_status()
+    return r.content
+
+
 def upload_payroll_outputs_to_gdrive(
     year: int, month: int, output_dir: str | Path,
     parent_folder_id: str = GDRIVE_OUTPUTS_FOLDER_ID,
@@ -679,7 +707,7 @@ def upload_payroll_outputs_to_gdrive(
         raise FileNotFoundError(f"No output folder to upload: {local}")
 
     session = _drive_session()
-    sub_name = f"Payroll_Archive_{year}_{month:02d}"
+    sub_name = _archive_folder_name(year, month)
     sub_id = _drive_get_or_create_folder(session, parent_folder_id, sub_name)
     n = _drive_upload_dir(session, local, sub_id)
     return f"https://drive.google.com/drive/folders/{sub_id}", n
