@@ -20,19 +20,33 @@ pip install -r requirements.txt
 
 ### Google Sheets integration
 
-Google Sheets and Drive are the system of record: payroll reads its inputs from Sheets and writes its outputs back to Drive. This requires OAuth credentials:
+Google Sheets and Drive are the system of record: payroll reads its inputs from Sheets and writes its outputs back to Drive. This requires OAuth credentials.
 
-1. Place your Google Cloud OAuth client credentials (installed app type) at:
+The OAuth client lives in the **`elaccounting`** Google Cloud project, which has the Sheets and Drive APIs enabled.
+
+1. Download the Desktop-app OAuth client JSON (Cloud console → APIs & Services → Credentials) and save it at:
    ```
-   ~/.config/google/everyday_creds.json
+   ~/.config/google/elaccounting_creds.json
    ```
-2. On first use, gspread will open a browser for authorization and cache the token at:
+2. On first use, gspread opens a browser for consent and caches your personal token at:
    ```
-   ~/.config/google/gspread_authorized_user.json
+   ~/.config/google/elaccounting_token.json
    ```
    Required scopes: `spreadsheets` and `drive`.
 
-The target spreadsheets must already exist and be accessible to the authorized Google account. Their IDs are configured at the top of `src/gsync.py`.
+Both paths are defined in `src/gauth.py`. Keep them mode `600` — the token is a live bearer credential.
+
+### Adding another person
+
+Payroll authenticates as a *user*, not a service account, so access is governed by Drive sharing rather than Cloud IAM. To let a colleague run payroll:
+
+1. Give them a copy of `elaccounting_creds.json` — this is the shared *app* identity, and for a desktop-app client Google does not treat the secret as confidential. **Never** copy your `elaccounting_token.json`; theirs is created by their own consent flow.
+2. Make sure the OAuth consent screen admits them (Internal user type covers everyone in the Workspace org; otherwise add them under Audience → Test users).
+3. Share the input Sheets and the `Payroll_Archive` Drive folder with them as **Editor** — payroll writes the leave-stocks tab and uploads outputs. This is the step most likely to be the actual blocker.
+
+Granting them an IAM role on the Cloud project does *not* give them access to the payroll data, and is not needed to run the tool.
+
+The target spreadsheets must already exist and be accessible to the authorized account. Their IDs are configured at the top of `src/gsync.py`.
 
 ## Running payroll
 

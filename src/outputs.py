@@ -363,10 +363,6 @@ def save_leave_stocks(
     return dest
 
 
-GSPREAD_CREDS = Path.home() / ".config/google/everyday_creds.json"
-GSPREAD_TOKEN = Path.home() / ".config/google/gspread_authorized_user.json"
-
-
 def upload_leave_stocks_to_gsheet(
     payslips: list[PaySlip], year: int, month: int,
     spreadsheet_name: str | None = None,
@@ -381,15 +377,14 @@ def upload_leave_stocks_to_gsheet(
     import gspread
     import re
 
+    from .gauth import client
+
     _, last_day = monthrange(year, month)
     tab_name = f"{year}_{month:02d}_{last_day:02d}"
     if spreadsheet_name is None:
         spreadsheet_name = f"leave_stocks_{year}"
 
-    gc = gspread.oauth(
-        credentials_filename=str(GSPREAD_CREDS),
-        authorized_user_filename=str(GSPREAD_TOKEN),
-    )
+    gc = client()
     try:
         sh = gc.open(spreadsheet_name)
     except gspread.SpreadsheetNotFound:
@@ -558,6 +553,8 @@ def _drive_session():
     """
     from google.oauth2.credentials import Credentials
     from google.auth.transport.requests import AuthorizedSession
+
+    from .gauth import GSPREAD_TOKEN
 
     creds = Credentials.from_authorized_user_file(str(GSPREAD_TOKEN))
     return AuthorizedSession(creds)

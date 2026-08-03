@@ -25,7 +25,7 @@ from pathlib import Path
 import gspread
 from gspread.utils import ExportFormat
 
-from .loaders import GSPREAD_CREDS, GSPREAD_TOKEN
+from .gauth import client
 
 # Google Sheet keys: the <key> in docs.google.com/spreadsheets/d/<key>/edit
 MASTER_EMPLOYEES_KEY = "1w0tW_23qsBYvxYRIy9R5rJocxP9K58m4UJBeg3220u0"
@@ -37,14 +37,6 @@ LEAVE_STOCKS_NAME = "leave_stocks_{year}"
 SOURCES = ("master_employees", "contracts", "attendance", "leave_stocks")
 
 _TAB_DATE = re.compile(r"^(\d{4})_(\d{2})_(\d{2})$")
-
-
-def client() -> gspread.Client:
-    """Authorized gspread client using the shared OAuth token."""
-    return gspread.oauth(
-        credentials_filename=str(GSPREAD_CREDS),
-        authorized_user_filename=str(GSPREAD_TOKEN),
-    )
 
 
 def attendance_xlsx_path(dest: Path, year: int) -> Path:

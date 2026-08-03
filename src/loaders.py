@@ -49,11 +49,6 @@ def load_employees(path: str | Path) -> list[Employee]:
     return employees
 
 
-# Google Sheets credentials (shared with src.outputs upload path)
-GSPREAD_CREDS = Path.home() / ".config/google/everyday_creds.json"
-GSPREAD_TOKEN = Path.home() / ".config/google/gspread_authorized_user.json"
-
-
 def load_employees_from_gsheet(
     key: str, worksheet: str | None = None
 ) -> list[Employee]:
@@ -64,12 +59,9 @@ def load_employees_from_gsheet(
     by title; the first tab is used when omitted. The header row supplies
     column names, matching the TSV layout used by load_employees.
     """
-    import gspread
+    from .gauth import client
 
-    gc = gspread.oauth(
-        credentials_filename=str(GSPREAD_CREDS),
-        authorized_user_filename=str(GSPREAD_TOKEN),
-    )
+    gc = client()
     sh = gc.open_by_key(key)
     ws = sh.worksheet(worksheet) if worksheet else sh.sheet1
 
