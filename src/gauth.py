@@ -23,8 +23,14 @@ Both live outside the repo so no credential can be committed.
 from pathlib import Path
 
 CONFIG_DIR = Path.home() / ".config/google"
-GSPREAD_CREDS = CONFIG_DIR / "elaccounting_creds.json"
-GSPREAD_TOKEN = CONFIG_DIR / "elaccounting_token.json"
+
+# TEMPORARY: still the everyday-476509 client. The move to elaccounting is
+# blocked on creating a Desktop client there, and doing that in the same
+# week as a statutory filing risks the deadline on a consent-screen
+# surprise. To finish the move, create the client (see README), then switch
+# these two paths to elaccounting_creds.json / elaccounting_token.json.
+GSPREAD_CREDS = CONFIG_DIR / "everyday_creds.json"
+GSPREAD_TOKEN = CONFIG_DIR / "gspread_authorized_user.json"
 
 _SETUP_HELP = f"""OAuth client not found at {GSPREAD_CREDS}
 
