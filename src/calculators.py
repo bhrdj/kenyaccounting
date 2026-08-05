@@ -130,18 +130,25 @@ class GrossCalculator:
 
         monthly_fraction, casual_until = month_split(self.contract, self.payroll_date)
 
-        # Casual days are paid only for days actually worked, at the gazetted
-        # daily rate -- unlike the monthly portion, where absence is the thing
-        # that gets deducted. So an employee who has not started yet costs
-        # nothing for the days they were not on site, without anyone having to
-        # enter absence rows for them.
+        # Casual days are paid only for hours actually worked -- unlike the
+        # monthly portion, where absence is the thing that gets deducted. So an
+        # employee who has not started yet costs nothing for the days they were
+        # not on site, without anyone having to enter absence rows for them.
+        #
+        # The gazetted daily rate is scaled by the contract's standard day, so
+        # a full day pays exactly the daily minimum and a short trial shift
+        # pays in proportion. Deriving the hourly figure this way rather than
+        # using the Order's published hourly rate keeps a full day at the daily
+        # minimum; the published hourly rate is daily/10, which would pay less
+        # than a day's minimum for a standard 8.67-hour day.
         casual_pay = Decimal(0)
         if casual_until is not None:
-            casual_days = sum(
-                1 for d in self.timesheet_days
-                if d.date <= casual_until and d.hours_normal > 0
+            daily_hours = LeaveCalculator._get_daily_hours(self.contract)
+            casual_hours = sum(
+                d.hours_normal for d in self.timesheet_days if d.date <= casual_until
             )
-            casual_pay = StatutoryRates.CASUAL_DAILY_RATE * casual_days
+            if daily_hours > 0:
+                casual_pay = StatutoryRates.CASUAL_DAILY_RATE * (casual_hours / daily_hours)
 
         earned = self.contract.base_salary * monthly_fraction + casual_pay
         actual_base, housing_allowance, total_gross = self._compute_housing(earned)

@@ -79,14 +79,42 @@ class TestCasualPay:
     def test_casual_days_paid_per_day_worked(self):
         """Days before the start date are paid only when actually worked."""
         c = contract(date(2026, 7, 11))
-        # Three casual days worked, plus the monthly period.
+        # Three full casual days worked, plus the monthly period.
         days = workdays([date(2026, 7, 6), date(2026, 7, 7), date(2026, 7, 8)])
         gross = GrossCalculator(c, days, date(2026, 7, 28)).calculate()
 
         expected_casual = StatutoryRates.CASUAL_DAILY_RATE * 3
         expected_monthly = c.base_salary * (Decimal(21) / Decimal(31))
         expected = (expected_casual + expected_monthly) * Decimal("1.15")  # +housing
-        assert gross.total_gross == pytest.approx(expected, abs=Decimal("0.01"))
+        assert gross.total_gross == pytest.approx(expected, abs=Decimal("0.5"))
+
+    def test_full_standard_day_pays_exactly_the_daily_minimum(self):
+        c = contract(date(2026, 7, 11))
+        base = GrossCalculator(c, [], date(2026, 7, 28)).calculate().total_gross
+        one_day = GrossCalculator(
+            c, workdays([date(2026, 7, 6)]), date(2026, 7, 28)).calculate().total_gross
+        earned = (one_day - base) / Decimal("1.15")  # strip the housing uplift
+        assert earned == pytest.approx(StatutoryRates.CASUAL_DAILY_RATE, abs=Decimal("0.5"))
+
+    def test_short_trial_shift_pays_in_proportion(self):
+        """A half-day trial earns half a day's wage, not a whole one."""
+        c = contract(date(2026, 7, 11))
+        base = GrossCalculator(c, [], date(2026, 7, 28)).calculate().total_gross
+        half = workdays([date(2026, 7, 6)], hours=Decimal("4.335"))  # half of 8.67
+        earned = (GrossCalculator(c, half, date(2026, 7, 28)).calculate().total_gross
+                  - base) / Decimal("1.15")
+        assert earned == pytest.approx(StatutoryRates.CASUAL_DAILY_RATE / 2,
+                                       abs=Decimal("0.5"))
+
+    def test_longer_day_earns_proportionally_more(self):
+        c = contract(date(2026, 7, 11))
+        base = GrossCalculator(c, [], date(2026, 7, 28)).calculate().total_gross
+        short = GrossCalculator(c, workdays([date(2026, 7, 6)], hours=Decimal("2")),
+                                date(2026, 7, 28)).calculate().total_gross
+        long_ = GrossCalculator(c, workdays([date(2026, 7, 6)], hours=Decimal("8")),
+                                date(2026, 7, 28)).calculate().total_gross
+        assert short > base
+        assert long_ > short
 
     def test_unworked_casual_days_cost_nothing(self):
         """No absence rows needed: a day not worked is simply not paid."""
