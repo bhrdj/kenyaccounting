@@ -23,17 +23,15 @@ import sys
 import tempfile
 from contextlib import nullcontext
 from datetime import date
-from decimal import Decimal
 from pathlib import Path
 
 from extract_timesheets_xlsx2tsvs import extract_month
-from src.calculators import PayrollEngine
+from src.calculators import PayrollEngine, default_leave_stock
 from src.gsync import attendance_xlsx_path, sync_inputs
 from src.loaders import (
     find_leave_stocks_for_month, load_contracts, load_employees,
     load_leave_stocks, load_timesheet_folder,
 )
-from src.models import LeaveStock
 from src.outputs import (
     PayslipRenderer, download_archived_file, save_payroll_outputs,
     upload_leave_stocks_to_gsheet, upload_payroll_outputs_to_gdrive,
@@ -138,14 +136,8 @@ def run(year: int, month: int, workdir: Path, sync: bool, save: bool,
             skipped.append((emp_id, f"no timesheet ({employees[emp_id].name})"))
             continue
         if emp_id not in leave_stocks:
-            # Create a default leave stock for employees without one
-            leave_stocks[emp_id] = LeaveStock(
-                employee_id=emp_id,
-                sick_full_pay=Decimal("7"),
-                sick_half_pay=Decimal("7"),
-                annual_leave=Decimal("0"),
-                as_of_date=date(2025, 12, 31),
-            )
+            leave_stocks[emp_id] = default_leave_stock(
+                emp_id, contracts[emp_id], payroll_date)
 
         payslip = engine.process(
             employees[emp_id], contracts[emp_id], timesheets[emp_id], leave_stocks[emp_id]

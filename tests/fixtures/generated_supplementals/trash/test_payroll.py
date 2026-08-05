@@ -252,12 +252,12 @@ class TestExternallyValidatedExamples:
 
 @pytest.fixture
 def employees():
-    return {e.employee_id: e for e in load_employees("tests/fixtures/test_employees.tsv")}
+    return {e.employee_id: e for e in load_employees("tests/fixtures/generated_supplementals/test_employees.tsv")}
 
 
 @pytest.fixture
 def contracts():
-    return {c.employee_id: c for c in load_contracts("tests/fixtures/test_contracts.tsv")}
+    return {c.employee_id: c for c in load_contracts("tests/fixtures/generated_supplementals/test_contracts.tsv")}
 
 
 @pytest.fixture
@@ -268,7 +268,7 @@ def leave_stocks():
 
 @pytest.fixture
 def timesheet_feb():
-    entries = load_timesheet("tests/fixtures/test_timesheets/2026_02.tsv")
+    entries = load_timesheet("tests/fixtures/generated_supplementals/test_timesheets/2026_02.tsv")
     ts_map = {}
     for entry in entries:
         if entry.employee_id not in ts_map:

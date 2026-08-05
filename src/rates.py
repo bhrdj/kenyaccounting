@@ -132,8 +132,17 @@ class StatutoryRates:
     # NSSF Year 4 transition date
     NSSF_YEAR_4_START = date(2026, 2, 1)
 
-    # Minimum wages (Nairobi/Cities) - from Regulation of Wages Order 2024
-    MIN_WAGE_NAIROBI_UNSKILLED = Decimal("16113.75")  # General labourer monthly
+    # Minimum wages (Nairobi/Cities), general labourer, from the Regulation of
+    # Wages (General) (Amendment) Order. The daily rate is what casual days are
+    # paid at; both figures exclude the 15% housing allowance, which the gross
+    # calculator adds on top when the employer provides no housing.
+    #
+    # UNVERIFIED: these came from backgrounders/backgrounder-Employment_Law_
+    # Update_2026-AI_Generated.md, whose own header asks someone to confirm the
+    # 2024 Order is still the operative one. Have an accountant check them
+    # against the gazette before relying on a payroll run.
+    MIN_WAGE_NAIROBI_UNSKILLED = Decimal("16113.75")  # monthly
+    CASUAL_DAILY_RATE = Decimal("775.39")             # per day worked
 
     # Housing allowance rate (per Employment Act Section 31)
     HOUSING_ALLOWANCE_RATE = Decimal("0.15")

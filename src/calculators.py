@@ -1,4 +1,5 @@
-from datetime import date
+from calendar import monthrange
+from datetime import date, timedelta
 from decimal import Decimal
 
 from .models import (
@@ -125,7 +126,29 @@ class GrossCalculator:
     def _calc_fixed_monthly(self) -> GrossBreakdown:
         # base_salary is interpreted per salary_basis. Holiday premium and
         # other monthly adjustments are applied later in _apply_monthly_adjustments.
-        actual_base, housing_allowance, total_gross = self._compute_housing(self.contract.base_salary)
+        from .rates import StatutoryRates
+
+        monthly_fraction, casual_until = month_split(self.contract, self.payroll_date)
+
+        # Casual days are paid only for days actually worked, at the gazetted
+        # daily rate -- unlike the monthly portion, where absence is the thing
+        # that gets deducted. So an employee who has not started yet costs
+        # nothing for the days they were not on site, without anyone having to
+        # enter absence rows for them.
+        casual_pay = Decimal(0)
+        if casual_until is not None:
+            casual_days = sum(
+                1 for d in self.timesheet_days
+                if d.date <= casual_until and d.hours_normal > 0
+            )
+            casual_pay = StatutoryRates.CASUAL_DAILY_RATE * casual_days
+
+        earned = self.contract.base_salary * monthly_fraction + casual_pay
+        actual_base, housing_allowance, total_gross = self._compute_housing(earned)
+
+        # Baseline stays the full-time monthly figure so the summary table can
+        # show what a complete month would have cost.
+        baseline, _, _ = self._compute_housing(self.contract.base_salary)
 
         return GrossBreakdown(
             base_pay=actual_base,
@@ -134,7 +157,7 @@ class GrossCalculator:
             housing_allowance=housing_allowance,
             housing_benefit=Decimal(0),
             total_gross=total_gross,
-            baseline_base_pay=actual_base,
+            baseline_base_pay=baseline,
             worked_base_pay=actual_base,
         )
 
@@ -177,11 +200,47 @@ class GrossCalculator:
         )
 
 
+def month_split(contract: Contract, payroll_date: date | None) -> tuple[Decimal, date | None]:
+    """Split a payroll month at the date the monthly contract starts.
+
+    Staff routinely work part of a month as a casual on the daily minimum
+    wage and the rest on a monthly contract. Returns the fraction of the
+    month covered by the monthly contract, and the last date to treat as
+    casual (None when the whole month is monthly).
+
+    The monthly side is prorated by calendar days rather than working days:
+    a monthly salary is consideration for the period, not for a count of
+    shifts, and calendar-day proration is what the payslip has to survive
+    being questioned on. Tax treatment is unaffected either way -- the two
+    portions are summed into one gross and taxed as a single month.
+    """
+    if payroll_date is None or contract.start_date is None:
+        return Decimal(1), None
+
+    first = date(payroll_date.year, payroll_date.month, 1)
+    days_in_month = monthrange(payroll_date.year, payroll_date.month)[1]
+    last = date(payroll_date.year, payroll_date.month, days_in_month)
+
+    start = contract.start_date
+    if start <= first:
+        return Decimal(1), None
+    if start > last:
+        # Monthly contract has not begun; the whole month is casual.
+        return Decimal(0), last
+
+    monthly_days = (last - start).days + 1
+    return Decimal(monthly_days) / Decimal(days_in_month), start - timedelta(days=1)
+
+
 class LeaveCalculator:
-    def __init__(self, timesheet_days: list[TimesheetDay], leave_stock: LeaveStock, contract: Contract):
+    def __init__(self, timesheet_days: list[TimesheetDay], leave_stock: LeaveStock,
+                 contract: Contract, monthly_fraction: Decimal = Decimal(1)):
         self.timesheet_days = timesheet_days
         self.leave_stock = leave_stock
         self.contract = contract
+        # Casual days accrue no leave, so accrual scales with the part of the
+        # month actually spent on the monthly contract.
+        self.monthly_fraction = monthly_fraction
         self.daily_hours = self._get_daily_hours(contract)
 
     @staticmethod
@@ -193,6 +252,11 @@ class LeaveCalculator:
         # 48+ hours/week implies 6-day schedule, otherwise 5-day
         work_days = Decimal("6") if contract.weekly_hours >= 48 else Decimal("5")
         return (wh / work_days).quantize(Decimal("0.01"))
+
+    # Employment Act s.30: sick leave is earned only after two months of
+    # continuous service, so a new starter opens at zero rather than with the
+    # full entitlement.
+    SICK_QUALIFYING_MONTHS = 2
 
     # Employment Act: 21 annual leave days/year, 7+7 sick days/year
     ANNUAL_LEAVE_ACCRUAL = Decimal("1.75")       # 21 / 12
@@ -207,11 +271,13 @@ class LeaveCalculator:
         annual_used = Decimal(0)  # hours
         unpaid_hours = Decimal(0)
 
-        # Stock balances are in days — add monthly accrual first
+        # Stock balances are in days — add monthly accrual first, scaled by the
+        # fraction of the month on a monthly contract (casuals accrue nothing).
         # Consolidated leave contracts don't accrue annual leave (it's built into the schedule)
-        remaining_sick_full = self.leave_stock.sick_full_pay + self.SICK_FULL_PAY_ACCRUAL
-        remaining_sick_half = self.leave_stock.sick_half_pay + self.SICK_HALF_PAY_ACCRUAL
-        annual_accrual = Decimal(0) if self.contract.contract_type == "consolidated_leave" else self.ANNUAL_LEAVE_ACCRUAL
+        f = self.monthly_fraction
+        remaining_sick_full = self.leave_stock.sick_full_pay + self.SICK_FULL_PAY_ACCRUAL * f
+        remaining_sick_half = self.leave_stock.sick_half_pay + self.SICK_HALF_PAY_ACCRUAL * f
+        annual_accrual = Decimal(0) if self.contract.contract_type == "consolidated_leave" else self.ANNUAL_LEAVE_ACCRUAL * f
         remaining_annual = self.leave_stock.annual_leave + annual_accrual
 
         # Public holidays are paid regardless — absences on those days
@@ -448,6 +514,31 @@ class MinimumWageValidator:
             return True, None
 
 
+def default_leave_stock(employee_id: int, contract: Contract, payroll_date: date) -> LeaveStock:
+    """Opening leave balances for an employee with no leave record on file.
+
+    Previously every such employee was seeded with the full 7+7 sick days,
+    which handed a brand-new casual the whole statutory entitlement on their
+    first day. Employment Act s.30 earns sick leave only after two months of
+    continuous service, so short-service starters open at zero.
+    """
+    start = contract.start_date
+    months = (payroll_date.year - start.year) * 12 + (payroll_date.month - start.month)
+    if payroll_date.day < start.day:
+        months -= 1
+    qualified = months >= LeaveCalculator.SICK_QUALIFYING_MONTHS
+    sick = Decimal("7") if qualified else Decimal(0)
+
+    first = date(payroll_date.year, payroll_date.month, 1)
+    return LeaveStock(
+        employee_id=employee_id,
+        sick_full_pay=sick,
+        sick_half_pay=sick,
+        annual_leave=Decimal(0),
+        as_of_date=first - timedelta(days=1),
+    )
+
+
 class PayrollEngine:
     def __init__(self, payroll_date: date):
         self.payroll_date = payroll_date
@@ -461,7 +552,8 @@ class PayrollEngine:
         leave_stock: LeaveStock,
     ) -> PaySlip:
         # 1. Calculate leave allocation
-        leave_calc = LeaveCalculator(timesheet_days, leave_stock, contract)
+        monthly_fraction, _ = month_split(contract, self.payroll_date)
+        leave_calc = LeaveCalculator(timesheet_days, leave_stock, contract, monthly_fraction)
         leave = leave_calc.allocate()
 
         # 2. Calculate gross
