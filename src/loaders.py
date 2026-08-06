@@ -271,8 +271,10 @@ def load_timesheet_folder(
                 ot_15 = row.get("hrs_ot_1_5", "").strip()
                 ot_20 = row.get("hrs_ot_2_0", "").strip()
 
-                # Skip rows with no data filled in yet
-                if not hrs_wrkd and not hrs_miss and not hrs_sik:
+                # Skip rows with no data filled in yet. A recorded trial
+                # payment counts as data even with no hours beside it.
+                if not hrs_wrkd and not hrs_miss and not hrs_sik \
+                        and not row.get("casual_pay", "").strip():
                     continue
 
                 absent = _parse_decimal(hrs_miss) > 0 or _parse_decimal(hrs_sik) > 0
@@ -287,6 +289,7 @@ def load_timesheet_folder(
                         hours_ot_2_0=_parse_decimal(ot_20),
                         absent=absent,
                         sick=sick,
+                        casual_pay=_parse_decimal(row.get("casual_pay", "")),
                     )
                 )
 

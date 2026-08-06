@@ -51,6 +51,11 @@ class TimesheetDay:
     hours_ot_2_0: Decimal
     absent: bool
     sick: bool
+    # Lump sum actually paid for a working-trial day, before the employee's
+    # monthly contract starts. Round figures are used deliberately, to signal
+    # that the engagement is a trial rather than employment. Zero means none
+    # was recorded, in which case the gazetted hourly rate applies instead.
+    casual_pay: Decimal = Decimal(0)
 
 
 # Calculation Results

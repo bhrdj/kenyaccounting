@@ -135,20 +135,24 @@ class GrossCalculator:
         # employee who has not started yet costs nothing for the days they were
         # not on site, without anyone having to enter absence rows for them.
         #
-        # The gazetted daily rate is scaled by the contract's standard day, so
-        # a full day pays exactly the daily minimum and a short trial shift
-        # pays in proportion. Deriving the hourly figure this way rather than
-        # using the Order's published hourly rate keeps a full day at the daily
-        # minimum; the published hourly rate is daily/10, which would pay less
-        # than a day's minimum for a standard 8.67-hour day.
+        # Trial days are settled as a round lump sum, recorded per day in the
+        # attendance sheet: a round figure communicates "this is a trial" in a
+        # way a computed amount does not. Where none is recorded the gazetted
+        # rate applies instead, scaled by the contract's standard day -- so a
+        # forgotten entry underpays nobody. That scaling deliberately avoids
+        # the Order's published hourly rate, which is daily/10 and would pay
+        # less than a day's minimum for a standard 8.67-hour day.
         casual_pay = Decimal(0)
         if casual_until is not None:
             daily_hours = LeaveCalculator._get_daily_hours(self.contract)
-            casual_hours = sum(
-                d.hours_normal for d in self.timesheet_days if d.date <= casual_until
-            )
-            if daily_hours > 0:
-                casual_pay = StatutoryRates.CASUAL_DAILY_RATE * (casual_hours / daily_hours)
+            for d in self.timesheet_days:
+                if d.date > casual_until:
+                    continue
+                if d.casual_pay > 0:
+                    casual_pay += d.casual_pay
+                elif daily_hours > 0:
+                    casual_pay += (StatutoryRates.CASUAL_DAILY_RATE
+                                   * (d.hours_normal / daily_hours))
 
         earned = self.contract.base_salary * monthly_fraction + casual_pay
         actual_base, housing_allowance, total_gross = self._compute_housing(earned)
@@ -512,13 +516,52 @@ class MinimumWageValidator:
                 )
             return True, None
         else:
-            # For fixed monthly, check actual base pay
-            if self.base_pay < self.MIN_WAGE_NAIROBI:
+            # For fixed monthly, check actual base pay. A mid-month starter is
+            # only on monthly terms for part of the month, so the floor is
+            # prorated to match -- otherwise every new hire trips this. Their
+            # casual days are checked separately, against the daily rate.
+            monthly_fraction, _ = month_split(self.contract, self.payroll_date)
+            threshold = self.MIN_WAGE_NAIROBI * monthly_fraction
+            if self.base_pay < threshold:
+                period = ("" if monthly_fraction == 1
+                          else f" for {monthly_fraction * 100:.0f}% of the month")
                 return False, (
-                    f"Base pay KES {self.base_pay:,.2f} is below Nairobi minimum wage "
-                    f"KES {self.MIN_WAGE_NAIROBI:,.2f}. Is this employee part-time?"
+                    f"Base pay KES {self.base_pay:,.2f} is below the Nairobi minimum "
+                    f"wage{period} of KES {threshold:,.2f}. Is this employee part-time?"
                 )
             return True, None
+
+
+def casual_underpayment_warnings(
+    contract: Contract, timesheet_days: list[TimesheetDay], payroll_date: date | None,
+) -> list[str]:
+    """Flag trial days whose lump sum falls below the gazetted hourly minimum.
+
+    Only days with both an amount and hours recorded can be checked; a lump
+    sum with no hours beside it is unverifiable, not necessarily wrong.
+    """
+    _, casual_until = month_split(contract, payroll_date)
+    if casual_until is None:
+        return []
+
+    daily_hours = LeaveCalculator._get_daily_hours(contract)
+    if daily_hours <= 0:
+        return []
+    hourly_min = StatutoryRates.CASUAL_DAILY_RATE / daily_hours
+
+    out = []
+    for d in timesheet_days:
+        if d.date > casual_until or d.casual_pay <= 0 or d.hours_normal <= 0:
+            continue
+        rate = d.casual_pay / d.hours_normal
+        if rate < hourly_min:
+            out.append(
+                f"Trial day {d.date}: KES {d.casual_pay:,.2f} for "
+                f"{d.hours_normal:g}h is KES {rate:,.2f}/hr, below the minimum "
+                f"KES {hourly_min:,.2f}/hr. Lawful minimum for these hours is "
+                f"KES {hourly_min * d.hours_normal:,.2f}."
+            )
+    return out
 
 
 def default_leave_stock(employee_id: int, contract: Contract, payroll_date: date) -> LeaveStock:
@@ -635,6 +678,13 @@ class PayrollEngine:
         is_valid, warning = min_wage_validator.validate()
         if not is_valid and warning:
             warnings.append(warning)
+
+        # 9b. A trial lump sum has to clear the gazetted hourly minimum for the
+        # hours recorded beside it. The hours are documented for thoroughness,
+        # which cuts both ways: they are also the evidence if a round figure
+        # turns out to be below the wage floor for the day it covered.
+        warnings.extend(casual_underpayment_warnings(
+            contract, timesheet_days, self.payroll_date))
 
         # 10. Format period string
         period = self.payroll_date.strftime("%B %Y")

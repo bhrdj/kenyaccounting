@@ -12,7 +12,7 @@ from decimal import Decimal
 import pytest
 
 from src.calculators import (
-    PAYECalculator,
+    PAYECalculator, casual_underpayment_warnings,
     GrossCalculator, LeaveCalculator, PayrollEngine, default_leave_stock,
     month_split,
 )
@@ -134,6 +134,73 @@ class TestCasualPay:
         c = contract(date(2026, 7, 27))
         gross = GrossCalculator(c, [], date(2026, 7, 28)).calculate()
         assert gross.baseline_base_pay == c.base_salary
+
+
+class TestTrialLumpSum:
+    """Trial days are settled as a round lump sum recorded per day."""
+
+    def _earned(self, days):
+        c = contract(date(2026, 7, 11))
+        base = GrossCalculator(c, [], date(2026, 7, 28)).calculate().total_gross
+        got = GrossCalculator(c, days, date(2026, 7, 28)).calculate().total_gross
+        return (got - base) / Decimal("1.15")  # strip the housing uplift
+
+    def test_recorded_lump_sum_is_paid_as_entered(self):
+        days = workdays([date(2026, 7, 6)], hours=Decimal("6.5"))
+        days[0].casual_pay = Decimal("600")
+        assert self._earned(days) == pytest.approx(Decimal("600"), abs=Decimal("0.5"))
+
+    def test_lump_sums_add_up_across_days(self):
+        days = workdays([date(2026, 7, 6), date(2026, 7, 7)], hours=Decimal("6.5"))
+        for d in days:
+            d.casual_pay = Decimal("600")
+        assert self._earned(days) == pytest.approx(Decimal("1200"), abs=Decimal("0.5"))
+
+    def test_lump_sum_overrides_the_hourly_calculation(self):
+        """A round figure is paid even where it differs from hours x rate."""
+        days = workdays([date(2026, 7, 6)], hours=Decimal("8.67"))  # would be 775.39
+        days[0].casual_pay = Decimal("800")
+        assert self._earned(days) == pytest.approx(Decimal("800"), abs=Decimal("0.5"))
+
+    def test_missing_lump_sum_falls_back_to_the_gazetted_rate(self):
+        """A forgotten entry must not underpay: the lawful amount applies."""
+        days = workdays([date(2026, 7, 6)])  # full 8.67h day, no amount recorded
+        assert self._earned(days) == pytest.approx(
+            StatutoryRates.CASUAL_DAILY_RATE, abs=Decimal("0.5"))
+
+    def test_mixed_recorded_and_missing_days(self):
+        days = workdays([date(2026, 7, 6), date(2026, 7, 7)])
+        days[0].casual_pay = Decimal("600")  # recorded
+        expected = Decimal("600") + StatutoryRates.CASUAL_DAILY_RATE  # 2nd falls back
+        assert self._earned(days) == pytest.approx(expected, abs=Decimal("0.5"))
+
+
+class TestCasualUnderpaymentWarning:
+    def _warn(self, hours, pay):
+        c = contract(date(2026, 7, 11))
+        days = workdays([date(2026, 7, 6)], hours=Decimal(str(hours)))
+        days[0].casual_pay = Decimal(str(pay))
+        return casual_underpayment_warnings(c, days, date(2026, 7, 28))
+
+    def test_lump_sum_below_minimum_for_the_hours_is_flagged(self):
+        # 600 for a full 8.67h day is 69.20/hr, under the 89.43 minimum.
+        w = self._warn("8.67", 600)
+        assert len(w) == 1
+        assert "below the minimum" in w[0]
+
+    def test_lump_sum_above_minimum_is_not_flagged(self):
+        # 600 for 6.5h is 92.31/hr, comfortably above.
+        assert self._warn("6.5", 600) == []
+
+    def test_full_day_at_the_daily_minimum_is_not_flagged(self):
+        assert self._warn("8.67", "775.39") == []
+
+    def test_days_after_the_start_date_are_not_checked(self):
+        """Once on monthly terms, the daily casual floor no longer applies."""
+        c = contract(date(2026, 7, 11))
+        days = workdays([date(2026, 7, 20)], hours=Decimal("8.67"))
+        days[0].casual_pay = Decimal("100")
+        assert casual_underpayment_warnings(c, days, date(2026, 7, 28)) == []
 
 
 class TestAccrualProration:
