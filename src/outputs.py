@@ -646,19 +646,46 @@ def _drive_upload_file(session, parent_id: str, path: Path,
     r.raise_for_status()
 
 
-def _drive_upload_dir(session, local_dir: Path, parent_id: str) -> int:
-    """Recursively upload a local directory's contents into a Drive folder."""
+def _drive_trash(session, file_id: str) -> None:
+    """Move a Drive file to the trash, where it stays recoverable."""
+    r = session.patch(f"{_DRIVE_API}/files/{file_id}",
+                      params={"supportsAllDrives": "true"},
+                      json={"trashed": True})
+    r.raise_for_status()
+
+
+def _drive_upload_dir(session, local_dir: Path, parent_id: str,
+                      replace: bool = False) -> tuple[int, list[str]]:
+    """Recursively upload a local directory's contents into a Drive folder.
+
+    With replace, anything in the Drive folder that this run did not produce
+    is trashed. Overwriting alone leaves stale files behind, and a payslip
+    for a name that has since been corrected is worse than no payslip -- the
+    folder is meant to be the record of what was actually paid.
+
+    Returns (files uploaded, names trashed).
+    """
     existing = _drive_list_children(session, parent_id)
-    count = 0
+    count, trashed = 0, []
+    local_names = set()
     for entry in sorted(local_dir.iterdir()):
+        local_names.add(entry.name)
         if entry.is_dir():
             sub_id = existing.get(entry.name) or _drive_get_or_create_folder(
                 session, parent_id, entry.name)
-            count += _drive_upload_dir(session, entry, sub_id)
+            n, t = _drive_upload_dir(session, entry, sub_id, replace)
+            count += n
+            trashed += [f"{entry.name}/{x}" for x in t]
         else:
             _drive_upload_file(session, parent_id, entry, existing.get(entry.name))
             count += 1
-    return count
+
+    if replace:
+        for name, fid in sorted(existing.items()):
+            if name not in local_names:
+                _drive_trash(session, fid)
+                trashed.append(name)
+    return count, trashed
 
 
 def _archive_folder_name(year: int, month: int) -> str:
@@ -692,12 +719,16 @@ def download_archived_file(
 def upload_payroll_outputs_to_gdrive(
     year: int, month: int, output_dir: str | Path,
     parent_folder_id: str = GDRIVE_OUTPUTS_FOLDER_ID,
-) -> tuple[str, int]:
+    replace: bool = False,
+) -> tuple[str, int, list[str]]:
     """Upload outputs/YYYY_MM/ into a same-named subfolder on Google Drive.
 
     Creates the YYYY_MM subfolder under parent_folder_id if it doesn't exist,
     then uploads every file (recursing into subfolders like payslips/),
-    overwriting files that already exist. Returns (folder_url, num_files).
+    overwriting files that already exist. With replace, files the run did not
+    produce are trashed rather than left behind.
+
+    Returns (folder_url, num_files, trashed_names).
     """
     local = Path(output_dir) / f"{year}_{month:02d}"
     if not local.is_dir():
@@ -706,5 +737,5 @@ def upload_payroll_outputs_to_gdrive(
     session = _drive_session()
     sub_name = _archive_folder_name(year, month)
     sub_id = _drive_get_or_create_folder(session, parent_folder_id, sub_name)
-    n = _drive_upload_dir(session, local, sub_id)
-    return f"https://drive.google.com/drive/folders/{sub_id}", n
+    n, trashed = _drive_upload_dir(session, local, sub_id, replace)
+    return f"https://drive.google.com/drive/folders/{sub_id}", n, trashed

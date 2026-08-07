@@ -196,8 +196,13 @@ def run(year: int, month: int, workdir: Path, sync: bool, save: bool,
     if payslips and save:
         written = save_payroll_outputs(payslips, year, month, outputs, COMPANY_NAME)
         print(f"\nGenerated {len(written)} output files")
-        drive_url, n_uploaded = upload_payroll_outputs_to_gdrive(year, month, outputs)
+        drive_url, n_uploaded, trashed = upload_payroll_outputs_to_gdrive(
+            year, month, outputs, replace=True)
         print(f"Uploaded {n_uploaded} output files to Google Drive: {drive_url}")
+        if trashed:
+            print(f"Trashed {len(trashed)} stale file(s) this run did not produce:")
+            for t in trashed:
+                print(f"  - {t}")
         tab = upload_leave_stocks_to_gsheet(payslips, year, month)
         print(f"Uploaded leave stocks to gsheet tab: {tab}")
 
