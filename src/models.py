@@ -28,7 +28,7 @@ class Contract:
     nssf_tier: str  # 'standard', 'contracted_out'
     # Date the monthly contract begins. None while someone is still a casual
     # on working trial: they have a casual_start but no monthly terms yet, so
-    # everything they earn comes from temp_daily_pay.
+    # they are paid the statutory daily rate for each day worked.
     start_date: date | None
     end_date: date | None
     status: str  # 'active', 'terminated'
@@ -57,11 +57,6 @@ class TimesheetDay:
     hours_ot_2_0: Decimal
     absent: bool
     sick: bool
-    # Lump sum actually paid for a working-trial day, before the employee's
-    # monthly contract starts. Round figures are used deliberately, to signal
-    # that the engagement is a trial rather than employment. Zero means none
-    # was recorded, in which case the gazetted hourly rate applies instead.
-    temp_daily_pay: Decimal = Decimal(0)
 
 
 # Calculation Results

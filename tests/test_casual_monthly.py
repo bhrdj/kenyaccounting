@@ -12,7 +12,7 @@ from decimal import Decimal
 import pytest
 
 from src.calculators import (
-    PAYECalculator, trial_pay_reconciliation_warnings, stray_trial_payment_warnings,
+    PAYECalculator, casual_days_worked,
     GrossCalculator, LeaveCalculator, PayrollEngine, default_leave_stock,
     month_split, overtime_trigger_warnings, weekly_hours_warnings,
     MinimumWageValidator, contract_coverage_warnings,
@@ -142,45 +142,6 @@ class TestCasualPay:
         assert gross.baseline_base_pay == c.base_salary
 
 
-class TestTrialPayReconciliation:
-    """Cash handed over is reconciled against the daily wage owed."""
-
-    def _warn(self, days):
-        return trial_pay_reconciliation_warnings(
-            contract(date(2026, 7, 11)), days, date(2026, 7, 28))
-
-    def test_underpayment_reports_the_balance_owed(self):
-        days = workdays([date(2026, 7, 6)])
-        days[0].temp_daily_pay = Decimal("300")
-        w = self._warn(days)
-        assert len(w) == 1 and "still owed" in w[0]
-
-    def test_overpayment_reports_the_advance(self):
-        days = workdays([date(2026, 7, 6)])
-        days[0].temp_daily_pay = Decimal("2000")
-        w = self._warn(days)
-        assert len(w) == 1 and "advanced beyond entitlement" in w[0]
-
-    def test_paying_the_full_entitlement_is_silent(self):
-        days = workdays([date(2026, 7, 6)])
-        days[0].temp_daily_pay = (StatutoryRates.CASUAL_DAILY_RATE
-                                  * Decimal("1.15")).quantize(Decimal("0.01"))
-        assert self._warn(days) == []
-
-    def test_cash_recorded_does_not_change_taxable_pay(self):
-        """The daily wage governs; what was handed over does not."""
-        plain = workdays([date(2026, 7, 6)])
-        with_cash = workdays([date(2026, 7, 6)])
-        with_cash[0].temp_daily_pay = Decimal("300")
-        c = contract(date(2026, 7, 11))
-        a = GrossCalculator(c, plain, date(2026, 7, 28)).calculate().total_gross
-        b = GrossCalculator(c, with_cash, date(2026, 7, 28)).calculate().total_gross
-        assert a == b
-
-    def test_nothing_worked_and_nothing_paid_is_silent(self):
-        assert self._warn([]) == []
-
-
 class TestCasualOnlyWorker:
     """Someone still on working trial: casual_start set, no monthly contract."""
 
@@ -195,8 +156,6 @@ class TestCasualOnlyWorker:
     def test_paid_at_the_daily_wage_for_days_worked(self):
         c = self._c()
         days = workdays([date(2026, 7, 29), date(2026, 7, 30)], hours=Decimal("8"))
-        for d in days:
-            d.temp_daily_pay = Decimal("300")  # cash given, does not govern
         gross = GrossCalculator(c, days, date(2026, 7, 28)).calculate()
         expected = StatutoryRates.CASUAL_DAILY_RATE * 2 * Decimal("1.15")
         assert gross.total_gross == pytest.approx(expected, abs=Decimal("0.5"))
@@ -209,7 +168,6 @@ class TestCasualOnlyWorker:
     def test_days_before_the_trial_began_are_not_paid(self):
         c = self._c(casual_start=date(2026, 7, 20))
         days = workdays([date(2026, 7, 10)], hours=Decimal("8"))
-        days[0].temp_daily_pay = Decimal("300")
         assert GrossCalculator(c, days, date(2026, 7, 28)).calculate().total_gross == Decimal(0)
 
     def test_legacy_contract_with_neither_date_stays_monthly(self):
@@ -217,28 +175,6 @@ class TestCasualOnlyWorker:
         frac, casual_until = month_split(c, date(2026, 7, 28))
         assert frac == Decimal(1)
         assert casual_until is None
-
-
-class TestStrayTrialPayments:
-    def test_payment_after_the_monthly_start_is_flagged(self):
-        c = contract(date(2026, 7, 27), casual_start=date(2026, 7, 7))
-        days = workdays([date(2026, 7, 29)], hours=Decimal("9"))
-        days[0].temp_daily_pay = Decimal("600")
-        w = stray_trial_payment_warnings(c, days, date(2026, 7, 28))
-        assert len(w) == 1 and "monthly contract started" in w[0]
-
-    def test_payment_before_the_trial_began_is_flagged(self):
-        c = contract(date(2026, 7, 27), casual_start=date(2026, 7, 7))
-        days = workdays([date(2026, 7, 2)], hours=Decimal("0"))
-        days[0].temp_daily_pay = Decimal("1200")
-        w = stray_trial_payment_warnings(c, days, date(2026, 7, 28))
-        assert len(w) == 1 and "trial began" in w[0]
-
-    def test_payment_inside_the_window_is_not_flagged(self):
-        c = contract(date(2026, 7, 27), casual_start=date(2026, 7, 7))
-        days = workdays([date(2026, 7, 20)], hours=Decimal("6.5"))
-        days[0].temp_daily_pay = Decimal("600")
-        assert stray_trial_payment_warnings(c, days, date(2026, 7, 28)) == []
 
 
 class TestAccrualProration:

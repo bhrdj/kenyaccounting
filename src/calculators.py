@@ -136,10 +136,9 @@ class GrossCalculator:
         # not on site, without anyone having to enter absence rows for them.
         #
         # Working-trial days are paid on the daily wage: one day's rate for
-        # each day worked, taken from the attendance sheet. What was actually
-        # handed over in cash is recorded in temp_daily_pay, but it does not
-        # govern -- taxable pay is what the statutory rate entitles them to,
-        # and the difference between the two is reported for settlement.
+        # each day with hours recorded. Everything comes from the attendance
+        # hours and the contract's casual_start / start_date -- there is no
+        # separate record of what was paid on the day.
         casual_days = casual_days_worked(self.contract, self.timesheet_days,
                                          casual_until)
         casual_base = StatutoryRates.CASUAL_DAILY_RATE * casual_days
@@ -654,72 +653,59 @@ def in_casual_window(contract: Contract, day: date, casual_until: date) -> bool:
     return contract.casual_start is None or day >= contract.casual_start
 
 
-def stray_trial_payment_warnings(
-    contract: Contract, timesheet_days: list[TimesheetDay], payroll_date: date | None,
+def contract_coverage_warnings(
+    contract: Contract, payroll_date: date | None,
 ) -> list[str]:
-    """Flag trial payments recorded outside the casual window.
+    """Flag a payroll month the contract on file does not actually cover.
 
-    These are not paid -- a payment dated after the monthly contract starts is
-    already covered by salary, and one dated before the trial began has no
-    engagement to attach to. Either way it is a data question rather than
-    something to silently swallow, so it is surfaced instead of dropped.
+    Only one contract row per employee survives loading, so a renewal
+    replaces the term that covered earlier months. The month is still paid on
+    monthly terms -- an established employee is not a casual -- but the gap
+    is worth knowing about when the payslip is questioned later.
     """
-    _, casual_until = month_split(contract, payroll_date)
-    out = []
-    for d in timesheet_days:
-        if d.temp_daily_pay <= 0:
-            continue
-        if casual_until is not None and in_casual_window(contract, d.date, casual_until):
-            continue
-        if casual_until is None:
-            why = "the whole month is on monthly terms"
-        elif d.date > casual_until:
-            why = f"the monthly contract started {contract.start_date}"
-        else:
-            why = f"the trial began {contract.casual_start}"
-        out.append(
-            f"Trial payment of KES {d.temp_daily_pay:,.2f} on {d.date} was not "
-            f"paid: {why}. Check the dates or move the amount."
-        )
-    return out
+    if payroll_date is None or contract.casual_start is not None:
+        return []
+    first = date(payroll_date.year, payroll_date.month, 1)
+    last = date(payroll_date.year, payroll_date.month,
+                monthrange(payroll_date.year, payroll_date.month)[1])
+
+    if contract.start_date is not None and contract.start_date > last:
+        return [f"Contract on file starts {contract.start_date}, after this payroll "
+                f"month. Paid on monthly terms from the same salary; the term "
+                f"covering this month is not in the sheet."]
+    if contract.end_date is not None and contract.end_date < first:
+        return [f"Contract on file ended {contract.end_date}, before this payroll "
+                f"month. Paid on monthly terms from the same salary; check whether "
+                f"a renewal is missing."]
+    return []
 
 
-def trial_pay_reconciliation_warnings(
-    contract: Contract, timesheet_days: list[TimesheetDay], payroll_date: date | None,
-) -> list[str]:
-    """Reconcile cash already handed over against the daily wage now owed.
+def casual_days_worked(contract: Contract, timesheet_days: list[TimesheetDay],
+                       casual_until: date | None) -> int:
+    """Count working-trial days worked, for payment at the daily wage.
 
-    temp_daily_pay records what a trial worker was actually given, usually a
-    round figure settled on the day. It no longer sets their pay: the daily
-    wage does. So the two can differ, and the difference is real money owed
-    or already advanced -- reported here rather than left to be noticed.
+    Any day with hours recorded counts as one day: a daily wage is
+    consideration for turning up, not for a count of hours. Real trial days
+    run 8-9 hours, so part-days are not the normal case -- but a short shift
+    does earn a full day's rate under this rule.
     """
-    _, casual_until = month_split(contract, payroll_date)
     if casual_until is None:
-        return []
+        return 0
+    return sum(
+        1 for d in timesheet_days
+        if in_casual_window(contract, d.date, casual_until) and d.hours_normal > 0
+    )
 
-    paid = sum(d.temp_daily_pay for d in timesheet_days
-               if in_casual_window(contract, d.date, casual_until))
-    days = casual_days_worked(contract, timesheet_days, casual_until)
-    if days == 0 and paid == 0:
-        return []
 
-    owed = StatutoryRates.CASUAL_DAILY_RATE * days
-    owed_gross = owed * (Decimal(1) + GrossCalculator.HOUSING_RATE)
-    diff = owed_gross - paid
-    if abs(diff) < Decimal("1"):
-        return []
+def in_casual_window(contract: Contract, day: date, casual_until: date) -> bool:
+    """Is `day` inside the working-trial period this contract was paid for?
 
-    if diff > 0:
-        return [
-            f"Trial pay: {days} day(s) at KES {StatutoryRates.CASUAL_DAILY_RATE:,.2f} "
-            f"plus housing is KES {owed_gross:,.2f}, but KES {paid:,.2f} was paid in "
-            f"cash. KES {diff:,.2f} still owed."
-        ]
-    return [
-        f"Trial pay: KES {paid:,.2f} was paid in cash but only KES {owed_gross:,.2f} "
-        f"is owed for {days} day(s). KES {-diff:,.2f} advanced beyond entitlement."
-    ]
+    The window runs from casual_start (where recorded) to the day before the
+    monthly contract begins.
+    """
+    if day > casual_until:
+        return False
+    return contract.casual_start is None or day >= contract.casual_start
 
 
 def default_leave_stock(employee_id: int, contract: Contract, payroll_date: date) -> LeaveStock:
@@ -837,13 +823,6 @@ class PayrollEngine:
         is_valid, warning = min_wage_validator.validate()
         if not is_valid and warning:
             warnings.append(warning)
-
-        # 9b. Trial days are paid at the statutory daily wage; whatever cash
-        # was handed over on the day is reconciled against it.
-        warnings.extend(trial_pay_reconciliation_warnings(
-            contract, timesheet_days, self.payroll_date))
-        warnings.extend(stray_trial_payment_warnings(
-            contract, timesheet_days, self.payroll_date))
 
         # 9c. Working-time limits. Overtime is entered by hand, so nothing
         # else notices a day or a week that ran past the statutory maximum.

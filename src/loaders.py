@@ -135,10 +135,10 @@ def load_contracts(path: str | Path, active_only: bool = True) -> list[Contract]
             elif base_salary_raw and base_salary_raw != "???":
                 effective_salary = Decimal(base_salary_raw)
             elif casual_start_raw and casual_start_raw != "???":
-                # A casual on working trial has no monthly salary yet -- every
-                # shilling comes from temp_daily_pay. Keeping the contract is
-                # what lets them be paid at all; dropping it for want of a
-                # salary would silently omit them from payroll.
+                # A casual on working trial has no monthly salary yet: they
+                # are paid the statutory daily rate per day worked. Keeping
+                # the contract is what lets them be paid at all; dropping it
+                # for want of a salary would silently omit them from payroll.
                 effective_salary = Decimal(0)
             else:
                 continue  # No salary and no trial start: nothing to pay from
@@ -283,10 +283,8 @@ def load_timesheet_folder(
                 ot_15 = row.get("hrs_ot_1_5", "").strip()
                 ot_20 = row.get("hrs_ot_2_0", "").strip()
 
-                # Skip rows with no data filled in yet. A recorded trial
-                # payment counts as data even with no hours beside it.
-                if not hrs_wrkd and not hrs_miss and not hrs_sik \
-                        and not row.get("temp_daily_pay", "").strip():
+                # Skip rows with no data filled in yet
+                if not hrs_wrkd and not hrs_miss and not hrs_sik:
                     continue
 
                 absent = _parse_decimal(hrs_miss) > 0 or _parse_decimal(hrs_sik) > 0
@@ -301,7 +299,6 @@ def load_timesheet_folder(
                         hours_ot_2_0=_parse_decimal(ot_20),
                         absent=absent,
                         sick=sick,
-                        temp_daily_pay=_parse_decimal(row.get("temp_daily_pay", "")),
                     )
                 )
 

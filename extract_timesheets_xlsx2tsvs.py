@@ -26,9 +26,6 @@ import openpyxl
 HEADER = [
     "date", "wkdy", "hrs_norm", "hrs_wrkd",
     "hrs_miss", "hrs_sik", "hrs_ot_1_5", "hrs_ot_2_0",
-    # Lump sum paid for a working-trial day. Absent from older workbooks,
-    # which simply yields a blank column.
-    "temp_daily_pay",
 ]
 
 
@@ -83,7 +80,6 @@ def extract_month(xlsx_path: Path, dest_dir: Path, year: int, month: int,
                 _fmt_num(row[5]),
                 _fmt_num(row[6]),
                 _fmt_num(row[7]),
-                _fmt_num(row[8]) if len(row) > 8 else "",
             ])
 
         out_path = dest_dir / f"{sheet_name}.tsv"
