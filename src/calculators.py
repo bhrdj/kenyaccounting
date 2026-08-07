@@ -252,12 +252,22 @@ def month_split(contract: Contract, payroll_date: date | None) -> tuple[Decimal,
 
 class LeaveCalculator:
     def __init__(self, timesheet_days: list[TimesheetDay], leave_stock: LeaveStock,
-                 contract: Contract, monthly_fraction: Decimal = Decimal(1)):
-        self.timesheet_days = timesheet_days
+                 contract: Contract, monthly_fraction: Decimal = Decimal(1),
+                 casual_until: date | None = None):
         self.leave_stock = leave_stock
         self.contract = contract
-        # Casual days accrue no leave, so accrual scales with the part of the
-        # month actually spent on the monthly contract.
+        # Leave is a feature of monthly employment, not of casual work. A
+        # casual is paid per day worked, so a day not worked is simply a day
+        # not paid -- there is nothing to deduct and no balance to draw on.
+        # Charging those days against leave would bill a new starter for days
+        # they were never engaged for, and drain a balance they have barely
+        # begun to accrue.
+        self.timesheet_days = [
+            d for d in timesheet_days
+            if casual_until is None or not in_casual_window(contract, d.date, casual_until)
+        ]
+        # Accrual likewise scales with the part of the month actually spent on
+        # the monthly contract; casual days earn none.
         self.monthly_fraction = monthly_fraction
         self.daily_hours = self._get_daily_hours(contract)
 
@@ -750,8 +760,9 @@ class PayrollEngine:
         leave_stock: LeaveStock,
     ) -> PaySlip:
         # 1. Calculate leave allocation
-        monthly_fraction, _ = month_split(contract, self.payroll_date)
-        leave_calc = LeaveCalculator(timesheet_days, leave_stock, contract, monthly_fraction)
+        monthly_fraction, casual_until = month_split(contract, self.payroll_date)
+        leave_calc = LeaveCalculator(timesheet_days, leave_stock, contract,
+                                     monthly_fraction, casual_until)
         leave = leave_calc.allocate()
 
         # 2. Calculate gross

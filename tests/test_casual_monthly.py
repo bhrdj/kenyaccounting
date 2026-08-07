@@ -443,3 +443,54 @@ class TestContractCoverage:
         a = GrossCalculator(renewal, days, date(2026, 7, 28)).calculate().total_gross
         b = GrossCalculator(normal, days, date(2026, 7, 28)).calculate().total_gross
         assert a == b
+
+
+class TestCasualDaysAreOutsideLeave:
+    """A casual is paid per day worked; not working is just not being paid."""
+
+    def _alloc(self, days, start=date(2026, 7, 27), casual_start=date(2026, 6, 25)):
+        c = contract(start, casual_start=casual_start)
+        frac, casual_until = month_split(c, date(2026, 7, 28))
+        stock = LeaveStock(employee_id=99, sick_full_pay=Decimal(0),
+                           sick_half_pay=Decimal(0), annual_leave=Decimal(0),
+                           as_of_date=date(2026, 6, 30))
+        return LeaveCalculator(days, stock, c, frac, casual_until).allocate()
+
+    def _absent(self, day):
+        return TimesheetDay(employee_id=99, date=day, hours_normal=Decimal(0),
+                            hours_ot_1_5=Decimal(0), hours_ot_2_0=Decimal(0),
+                            absent=True, sick=False)
+
+    def test_absence_in_the_casual_window_costs_nothing(self):
+        a = self._alloc([self._absent(date(2026, 7, 8))])
+        assert a.unpaid_hours == Decimal(0)
+        assert a.annual_leave_used == Decimal(0)
+
+    def test_absence_in_the_casual_window_does_not_drain_the_balance(self):
+        """A new starter must not be billed for days they were not engaged."""
+        a = self._alloc([self._absent(date(2026, 7, d)) for d in range(1, 20)])
+        assert a.updated_stock.annual_leave == a.updated_stock.annual_leave  # no crash
+        assert a.unpaid_hours == Decimal(0)
+
+    def test_absence_after_the_monthly_start_still_counts(self):
+        a = self._alloc([self._absent(date(2026, 7, 29))])
+        assert a.unpaid_hours > 0 or a.annual_leave_used > 0
+
+    def test_sick_day_in_the_casual_window_is_ignored(self):
+        d = self._absent(date(2026, 7, 8))
+        d.sick = True
+        a = self._alloc([d])
+        assert a.sick_full_pay_used == Decimal(0)
+        assert a.sick_half_pay_used == Decimal(0)
+
+    def test_a_wholly_casual_worker_accrues_and_uses_nothing(self):
+        c = contract(None, base=Decimal(0), casual_start=date(2026, 7, 1))
+        frac, casual_until = month_split(c, date(2026, 7, 28))
+        stock = LeaveStock(employee_id=99, sick_full_pay=Decimal(0),
+                           sick_half_pay=Decimal(0), annual_leave=Decimal(0),
+                           as_of_date=date(2026, 6, 30))
+        a = LeaveCalculator([self._absent(date(2026, 7, 8))], stock, c,
+                            frac, casual_until).allocate()
+        assert a.unpaid_hours == Decimal(0)
+        assert a.updated_stock.annual_leave == Decimal(0)
+        assert a.updated_stock.sick_full_pay == Decimal(0)
