@@ -26,11 +26,17 @@ class Contract:
     housing_type: str  # 'none', 'quarters', 'dorm', 'allowance'
     housing_market_value: Decimal | None  # For 'quarters' only
     nssf_tier: str  # 'standard', 'contracted_out'
-    start_date: date
+    # Date the monthly contract begins. None while someone is still a casual
+    # on working trial: they have a casual_start but no monthly terms yet, so
+    # everything they earn comes from temp_daily_pay.
+    start_date: date | None
     end_date: date | None
     status: str  # 'active', 'terminated'
     salary_basis: str = "gross"  # 'base' or 'gross' - how base_salary is interpreted
     hourly_divisor: str = "monthly"  # 'statutory' (225), 'monthly', or custom number
+    # Date the working trial began. Days from here until start_date (or the
+    # end of the month, if the monthly contract has not begun) are casual.
+    casual_start: date | None = None
 
 
 @dataclass
@@ -55,7 +61,7 @@ class TimesheetDay:
     # monthly contract starts. Round figures are used deliberately, to signal
     # that the engagement is a trial rather than employment. Zero means none
     # was recorded, in which case the gazetted hourly rate applies instead.
-    casual_pay: Decimal = Decimal(0)
+    temp_daily_pay: Decimal = Decimal(0)
 
 
 # Calculation Results

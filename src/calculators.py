@@ -142,19 +142,19 @@ class GrossCalculator:
         # forgotten entry underpays nobody. That scaling deliberately avoids
         # the Order's published hourly rate, which is daily/10 and would pay
         # less than a day's minimum for a standard 8.67-hour day.
-        casual_pay = Decimal(0)
+        temp_daily_pay = Decimal(0)
         if casual_until is not None:
             daily_hours = LeaveCalculator._get_daily_hours(self.contract)
             for d in self.timesheet_days:
-                if d.date > casual_until:
+                if not in_casual_window(self.contract, d.date, casual_until):
                     continue
-                if d.casual_pay > 0:
-                    casual_pay += d.casual_pay
+                if d.temp_daily_pay > 0:
+                    temp_daily_pay += d.temp_daily_pay
                 elif daily_hours > 0:
-                    casual_pay += (StatutoryRates.CASUAL_DAILY_RATE
-                                   * (d.hours_normal / daily_hours))
+                    temp_daily_pay += (StatutoryRates.CASUAL_DAILY_RATE
+                                       * (d.hours_normal / daily_hours))
 
-        earned = self.contract.base_salary * monthly_fraction + casual_pay
+        earned = self.contract.base_salary * monthly_fraction + temp_daily_pay
         actual_base, housing_allowance, total_gross = self._compute_housing(earned)
 
         # Baseline stays the full-time monthly figure so the summary table can
@@ -225,12 +225,19 @@ def month_split(contract: Contract, payroll_date: date | None) -> tuple[Decimal,
     being questioned on. Tax treatment is unaffected either way -- the two
     portions are summed into one gross and taxed as a single month.
     """
-    if payroll_date is None or contract.start_date is None:
+    if payroll_date is None:
         return Decimal(1), None
 
     first = date(payroll_date.year, payroll_date.month, 1)
     days_in_month = monthrange(payroll_date.year, payroll_date.month)[1]
     last = date(payroll_date.year, payroll_date.month, days_in_month)
+
+    if contract.start_date is None:
+        # No monthly contract yet. Someone on working trial is wholly casual;
+        # a contract with neither date is legacy data, treated as monthly.
+        if contract.casual_start is None:
+            return Decimal(1), None
+        return Decimal(0), last
 
     start = contract.start_date
     if start <= first:
@@ -532,6 +539,47 @@ class MinimumWageValidator:
             return True, None
 
 
+def in_casual_window(contract: Contract, day: date, casual_until: date) -> bool:
+    """Is `day` inside the working-trial period this contract was paid for?
+
+    The window runs from casual_start (where recorded) to the day before the
+    monthly contract begins.
+    """
+    if day > casual_until:
+        return False
+    return contract.casual_start is None or day >= contract.casual_start
+
+
+def stray_trial_payment_warnings(
+    contract: Contract, timesheet_days: list[TimesheetDay], payroll_date: date | None,
+) -> list[str]:
+    """Flag trial payments recorded outside the casual window.
+
+    These are not paid -- a payment dated after the monthly contract starts is
+    already covered by salary, and one dated before the trial began has no
+    engagement to attach to. Either way it is a data question rather than
+    something to silently swallow, so it is surfaced instead of dropped.
+    """
+    _, casual_until = month_split(contract, payroll_date)
+    out = []
+    for d in timesheet_days:
+        if d.temp_daily_pay <= 0:
+            continue
+        if casual_until is not None and in_casual_window(contract, d.date, casual_until):
+            continue
+        if casual_until is None:
+            why = "the whole month is on monthly terms"
+        elif d.date > casual_until:
+            why = f"the monthly contract started {contract.start_date}"
+        else:
+            why = f"the trial began {contract.casual_start}"
+        out.append(
+            f"Trial payment of KES {d.temp_daily_pay:,.2f} on {d.date} was not "
+            f"paid: {why}. Check the dates or move the amount."
+        )
+    return out
+
+
 def casual_underpayment_warnings(
     contract: Contract, timesheet_days: list[TimesheetDay], payroll_date: date | None,
 ) -> list[str]:
@@ -551,12 +599,14 @@ def casual_underpayment_warnings(
 
     out = []
     for d in timesheet_days:
-        if d.date > casual_until or d.casual_pay <= 0 or d.hours_normal <= 0:
+        if d.temp_daily_pay <= 0 or d.hours_normal <= 0:
             continue
-        rate = d.casual_pay / d.hours_normal
+        if not in_casual_window(contract, d.date, casual_until):
+            continue
+        rate = d.temp_daily_pay / d.hours_normal
         if rate < hourly_min:
             out.append(
-                f"Trial day {d.date}: KES {d.casual_pay:,.2f} for "
+                f"Trial day {d.date}: KES {d.temp_daily_pay:,.2f} for "
                 f"{d.hours_normal:g}h is KES {rate:,.2f}/hr, below the minimum "
                 f"KES {hourly_min:,.2f}/hr. Lawful minimum for these hours is "
                 f"KES {hourly_min * d.hours_normal:,.2f}."
@@ -684,6 +734,8 @@ class PayrollEngine:
         # which cuts both ways: they are also the evidence if a round figure
         # turns out to be below the wage floor for the day it covered.
         warnings.extend(casual_underpayment_warnings(
+            contract, timesheet_days, self.payroll_date))
+        warnings.extend(stray_trial_payment_warnings(
             contract, timesheet_days, self.payroll_date))
 
         # 10. Format period string

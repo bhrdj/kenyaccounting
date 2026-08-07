@@ -28,7 +28,7 @@ HEADER = [
     "hrs_miss", "hrs_sik", "hrs_ot_1_5", "hrs_ot_2_0",
     # Lump sum paid for a working-trial day. Absent from older workbooks,
     # which simply yields a blank column.
-    "casual_pay",
+    "temp_daily_pay",
 ]
 
 

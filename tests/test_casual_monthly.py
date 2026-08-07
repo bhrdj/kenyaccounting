@@ -12,7 +12,7 @@ from decimal import Decimal
 import pytest
 
 from src.calculators import (
-    PAYECalculator, casual_underpayment_warnings,
+    PAYECalculator, casual_underpayment_warnings, stray_trial_payment_warnings,
     GrossCalculator, LeaveCalculator, PayrollEngine, default_leave_stock,
     month_split,
 )
@@ -147,19 +147,19 @@ class TestTrialLumpSum:
 
     def test_recorded_lump_sum_is_paid_as_entered(self):
         days = workdays([date(2026, 7, 6)], hours=Decimal("6.5"))
-        days[0].casual_pay = Decimal("600")
+        days[0].temp_daily_pay = Decimal("600")
         assert self._earned(days) == pytest.approx(Decimal("600"), abs=Decimal("0.5"))
 
     def test_lump_sums_add_up_across_days(self):
         days = workdays([date(2026, 7, 6), date(2026, 7, 7)], hours=Decimal("6.5"))
         for d in days:
-            d.casual_pay = Decimal("600")
+            d.temp_daily_pay = Decimal("600")
         assert self._earned(days) == pytest.approx(Decimal("1200"), abs=Decimal("0.5"))
 
     def test_lump_sum_overrides_the_hourly_calculation(self):
         """A round figure is paid even where it differs from hours x rate."""
         days = workdays([date(2026, 7, 6)], hours=Decimal("8.67"))  # would be 775.39
-        days[0].casual_pay = Decimal("800")
+        days[0].temp_daily_pay = Decimal("800")
         assert self._earned(days) == pytest.approx(Decimal("800"), abs=Decimal("0.5"))
 
     def test_missing_lump_sum_falls_back_to_the_gazetted_rate(self):
@@ -170,7 +170,7 @@ class TestTrialLumpSum:
 
     def test_mixed_recorded_and_missing_days(self):
         days = workdays([date(2026, 7, 6), date(2026, 7, 7)])
-        days[0].casual_pay = Decimal("600")  # recorded
+        days[0].temp_daily_pay = Decimal("600")  # recorded
         expected = Decimal("600") + StatutoryRates.CASUAL_DAILY_RATE  # 2nd falls back
         assert self._earned(days) == pytest.approx(expected, abs=Decimal("0.5"))
 
@@ -179,7 +179,7 @@ class TestCasualUnderpaymentWarning:
     def _warn(self, hours, pay):
         c = contract(date(2026, 7, 11))
         days = workdays([date(2026, 7, 6)], hours=Decimal(str(hours)))
-        days[0].casual_pay = Decimal(str(pay))
+        days[0].temp_daily_pay = Decimal(str(pay))
         return casual_underpayment_warnings(c, days, date(2026, 7, 28))
 
     def test_lump_sum_below_minimum_for_the_hours_is_flagged(self):
@@ -199,8 +199,68 @@ class TestCasualUnderpaymentWarning:
         """Once on monthly terms, the daily casual floor no longer applies."""
         c = contract(date(2026, 7, 11))
         days = workdays([date(2026, 7, 20)], hours=Decimal("8.67"))
-        days[0].casual_pay = Decimal("100")
+        days[0].temp_daily_pay = Decimal("100")
         assert casual_underpayment_warnings(c, days, date(2026, 7, 28)) == []
+
+
+class TestCasualOnlyWorker:
+    """Someone still on working trial: casual_start set, no monthly contract."""
+
+    def _c(self, casual_start=date(2026, 7, 28)):
+        return contract(None, base=Decimal(0), casual_start=casual_start)
+
+    def test_whole_month_is_casual(self):
+        frac, casual_until = month_split(self._c(), date(2026, 7, 28))
+        assert frac == Decimal(0)
+        assert casual_until == date(2026, 7, 31)
+
+    def test_paid_only_from_recorded_trial_amounts(self):
+        c = self._c()
+        days = workdays([date(2026, 7, 29), date(2026, 7, 30)], hours=Decimal("8"))
+        for d in days:
+            d.temp_daily_pay = Decimal("300")
+        gross = GrossCalculator(c, days, date(2026, 7, 28)).calculate()
+        assert gross.total_gross == pytest.approx(Decimal("600") * Decimal("1.15"),
+                                                  abs=Decimal("0.5"))
+
+    def test_no_monthly_salary_leaks_in(self):
+        """A blank start_date must never be read as a full month's salary."""
+        gross = GrossCalculator(self._c(), [], date(2026, 7, 28)).calculate()
+        assert gross.total_gross == Decimal(0)
+
+    def test_days_before_the_trial_began_are_not_paid(self):
+        c = self._c(casual_start=date(2026, 7, 20))
+        days = workdays([date(2026, 7, 10)], hours=Decimal("8"))
+        days[0].temp_daily_pay = Decimal("300")
+        assert GrossCalculator(c, days, date(2026, 7, 28)).calculate().total_gross == Decimal(0)
+
+    def test_legacy_contract_with_neither_date_stays_monthly(self):
+        c = contract(None, casual_start=None)
+        frac, casual_until = month_split(c, date(2026, 7, 28))
+        assert frac == Decimal(1)
+        assert casual_until is None
+
+
+class TestStrayTrialPayments:
+    def test_payment_after_the_monthly_start_is_flagged(self):
+        c = contract(date(2026, 7, 27), casual_start=date(2026, 7, 7))
+        days = workdays([date(2026, 7, 29)], hours=Decimal("9"))
+        days[0].temp_daily_pay = Decimal("600")
+        w = stray_trial_payment_warnings(c, days, date(2026, 7, 28))
+        assert len(w) == 1 and "monthly contract started" in w[0]
+
+    def test_payment_before_the_trial_began_is_flagged(self):
+        c = contract(date(2026, 7, 27), casual_start=date(2026, 7, 7))
+        days = workdays([date(2026, 7, 2)], hours=Decimal("0"))
+        days[0].temp_daily_pay = Decimal("1200")
+        w = stray_trial_payment_warnings(c, days, date(2026, 7, 28))
+        assert len(w) == 1 and "trial began" in w[0]
+
+    def test_payment_inside_the_window_is_not_flagged(self):
+        c = contract(date(2026, 7, 27), casual_start=date(2026, 7, 7))
+        days = workdays([date(2026, 7, 20)], hours=Decimal("6.5"))
+        days[0].temp_daily_pay = Decimal("600")
+        assert stray_trial_payment_warnings(c, days, date(2026, 7, 28)) == []
 
 
 class TestAccrualProration:

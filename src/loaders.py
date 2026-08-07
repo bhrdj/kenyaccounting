@@ -128,13 +128,20 @@ def load_contracts(path: str | Path, active_only: bool = True) -> list[Contract]
             # Determine effective salary: use current_base_salary if available
             base_salary_raw = row.get("base_salary", "").strip()
             current_base_raw = row.get("current_base_salary", "").strip()
+            casual_start_raw = row.get("casual_start", "").strip()
 
             if current_base_raw and current_base_raw != "???":
                 effective_salary = Decimal(current_base_raw)
             elif base_salary_raw and base_salary_raw != "???":
                 effective_salary = Decimal(base_salary_raw)
+            elif casual_start_raw and casual_start_raw != "???":
+                # A casual on working trial has no monthly salary yet -- every
+                # shilling comes from temp_daily_pay. Keeping the contract is
+                # what lets them be paid at all; dropping it for want of a
+                # salary would silently omit them from payroll.
+                effective_salary = Decimal(0)
             else:
-                continue  # No salary info at all
+                continue  # No salary and no trial start: nothing to pay from
 
             # Parse weekly_hours
             wh_raw = row.get("weekly_hours", "").strip()
@@ -144,11 +151,15 @@ def load_contracts(path: str | Path, active_only: bool = True) -> list[Contract]
             hmv_raw = row.get("housing_market_value", "").strip()
             housing_market_value = Decimal(hmv_raw) if hmv_raw and hmv_raw != "???" else None
 
-            # Parse dates
+            # Parse dates. A blank start_date means the monthly contract has
+            # not begun -- left as None rather than defaulted, so a casual is
+            # never mistaken for someone owed a full month's salary.
             start_raw = row.get("start_date", "").strip()
             end_raw = row.get("end_date", "").strip()
-            start_date = _parse_date(start_raw) if start_raw and start_raw != "???" else date(2025, 1, 1)
+            start_date = _parse_date(start_raw) if start_raw and start_raw != "???" else None
             end_date = _parse_date(end_raw) if end_raw and end_raw != "???" else None
+            casual_start = (_parse_date(casual_start_raw)
+                            if casual_start_raw and casual_start_raw != "???" else None)
 
             # Parse optional fields with defaults
             nssf_tier = row.get("nssf_tier", "standard").strip()
@@ -181,6 +192,7 @@ def load_contracts(path: str | Path, active_only: bool = True) -> list[Contract]
                     status=status,
                     salary_basis=salary_basis,
                     hourly_divisor=hourly_divisor,
+                    casual_start=casual_start,
                 )
             )
     return contracts
@@ -274,7 +286,7 @@ def load_timesheet_folder(
                 # Skip rows with no data filled in yet. A recorded trial
                 # payment counts as data even with no hours beside it.
                 if not hrs_wrkd and not hrs_miss and not hrs_sik \
-                        and not row.get("casual_pay", "").strip():
+                        and not row.get("temp_daily_pay", "").strip():
                     continue
 
                 absent = _parse_decimal(hrs_miss) > 0 or _parse_decimal(hrs_sik) > 0
@@ -289,7 +301,7 @@ def load_timesheet_folder(
                         hours_ot_2_0=_parse_decimal(ot_20),
                         absent=absent,
                         sick=sick,
-                        casual_pay=_parse_decimal(row.get("casual_pay", "")),
+                        temp_daily_pay=_parse_decimal(row.get("temp_daily_pay", "")),
                     )
                 )
 
