@@ -84,18 +84,19 @@ class TestCasualPay:
         days = workdays([date(2026, 7, 6), date(2026, 7, 7), date(2026, 7, 8)])
         gross = GrossCalculator(c, days, date(2026, 7, 28)).calculate()
 
-        expected_casual = StatutoryRates.CASUAL_DAILY_RATE * 3
+        expected_casual = StatutoryRates.MIN_HOURLY_NAIROBI * Decimal("8.67") * 3
         expected_monthly = c.base_salary * (Decimal(21) / Decimal(31))
         expected = (expected_casual + expected_monthly) * Decimal("1.15")  # +housing
         assert gross.total_gross == pytest.approx(expected, abs=Decimal("0.5"))
 
-    def test_full_standard_day_pays_exactly_the_daily_minimum(self):
+    def test_day_pays_hours_at_the_prorated_minimum(self):
         c = contract(date(2026, 7, 11))
         base = GrossCalculator(c, [], date(2026, 7, 28)).calculate().total_gross
         one_day = GrossCalculator(
             c, workdays([date(2026, 7, 6)]), date(2026, 7, 28)).calculate().total_gross
         earned = (one_day - base) / Decimal("1.15")  # strip the housing uplift
-        assert earned == pytest.approx(StatutoryRates.CASUAL_DAILY_RATE, abs=Decimal("0.5"))
+        assert earned == pytest.approx(
+            StatutoryRates.MIN_HOURLY_NAIROBI * Decimal("8.67"), abs=Decimal("0.5"))
 
     def test_short_trial_shift_pays_in_proportion(self):
         """A half-day trial earns half a day's wage, not a whole one."""
@@ -104,8 +105,8 @@ class TestCasualPay:
         half = workdays([date(2026, 7, 6)], hours=Decimal("4.335"))  # half of 8.67
         earned = (GrossCalculator(c, half, date(2026, 7, 28)).calculate().total_gross
                   - base) / Decimal("1.15")
-        assert earned == pytest.approx(StatutoryRates.CASUAL_DAILY_RATE / 2,
-                                       abs=Decimal("0.5"))
+        assert earned == pytest.approx(
+            StatutoryRates.MIN_HOURLY_NAIROBI * Decimal("4.335"), abs=Decimal("0.5"))
 
     def test_longer_day_earns_proportionally_more(self):
         c = contract(date(2026, 7, 11))
@@ -163,16 +164,17 @@ class TestTrialLumpSum:
         days[0].temp_daily_pay = Decimal("800")
         assert self._earned(days) == pytest.approx(Decimal("800"), abs=Decimal("0.5"))
 
-    def test_missing_lump_sum_falls_back_to_the_gazetted_rate(self):
+    def test_missing_lump_sum_falls_back_to_the_prorated_minimum(self):
         """A forgotten entry must not underpay: the lawful amount applies."""
         days = workdays([date(2026, 7, 6)])  # full 8.67h day, no amount recorded
         assert self._earned(days) == pytest.approx(
-            StatutoryRates.CASUAL_DAILY_RATE, abs=Decimal("0.5"))
+            StatutoryRates.MIN_HOURLY_NAIROBI * Decimal("8.67"), abs=Decimal("0.5"))
 
     def test_mixed_recorded_and_missing_days(self):
         days = workdays([date(2026, 7, 6), date(2026, 7, 7)])
         days[0].temp_daily_pay = Decimal("600")  # recorded
-        expected = Decimal("600") + StatutoryRates.CASUAL_DAILY_RATE  # 2nd falls back
+        expected = (Decimal("600")  # recorded
+                    + StatutoryRates.MIN_HOURLY_NAIROBI * Decimal("8.67"))  # falls back
         assert self._earned(days) == pytest.approx(expected, abs=Decimal("0.5"))
 
 
@@ -417,7 +419,7 @@ class TestEffectiveHourlyMinimum:
         return v.validate()
 
     def test_below_the_hourly_floor_is_flagged(self):
-        ok, msg = self._validate(10000, 200)  # 50.00/hr
+        ok, msg = self._validate(10000, 200)  # 50.00/hr, under the 71.62 floor
         assert not ok and "below the minimum" in msg
 
     def test_above_the_hourly_floor_passes(self):
@@ -430,8 +432,8 @@ class TestEffectiveHourlyMinimum:
         assert ok
 
     def test_shortfall_amount_is_reported(self):
-        ok, msg = self._validate(7000, 100)  # 70/hr vs 77.54 -> 754 short
-        assert not ok and "754" in msg
+        ok, msg = self._validate(6000, 100)  # 60.00/hr vs 71.62 -> 1,161.67 short
+        assert not ok and "1,161" in msg
 
     def test_no_hours_recorded_is_not_flagged(self):
         ok, _ = self._validate(0, 0)

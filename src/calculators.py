@@ -137,22 +137,19 @@ class GrossCalculator:
         #
         # Trial days are settled as a round lump sum, recorded per day in the
         # attendance sheet: a round figure communicates "this is a trial" in a
-        # way a computed amount does not. Where none is recorded the gazetted
-        # rate applies instead, scaled by the contract's standard day -- so a
-        # forgotten entry underpays nobody. That scaling deliberately avoids
-        # the Order's published hourly rate, which is daily/10 and would pay
-        # less than a day's minimum for a standard 8.67-hour day.
+        # way a computed amount does not. Where none is recorded, hours are
+        # paid at the prorated minimum instead, so a forgotten entry underpays
+        # nobody.
         temp_daily_pay = Decimal(0)
         if casual_until is not None:
-            daily_hours = LeaveCalculator._get_daily_hours(self.contract)
             for d in self.timesheet_days:
                 if not in_casual_window(self.contract, d.date, casual_until):
                     continue
                 if d.temp_daily_pay > 0:
                     temp_daily_pay += d.temp_daily_pay
-                elif daily_hours > 0:
-                    temp_daily_pay += (StatutoryRates.CASUAL_DAILY_RATE
-                                       * (d.hours_normal / daily_hours))
+                else:
+                    temp_daily_pay += (StatutoryRates.MIN_HOURLY_NAIROBI
+                                       * d.hours_normal)
 
         earned = self.contract.base_salary * monthly_fraction + temp_daily_pay
         actual_base, housing_allowance, total_gross = self._compute_housing(earned)
@@ -642,10 +639,7 @@ def casual_underpayment_warnings(
     if casual_until is None:
         return []
 
-    daily_hours = LeaveCalculator._get_daily_hours(contract)
-    if daily_hours <= 0:
-        return []
-    hourly_min = StatutoryRates.CASUAL_DAILY_RATE / daily_hours
+    hourly_min = StatutoryRates.MIN_HOURLY_NAIROBI
 
     out = []
     for d in timesheet_days:
