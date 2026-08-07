@@ -141,8 +141,10 @@ class StatutoryRates:
     # Update_2026-AI_Generated.md, whose own header asks someone to confirm the
     # 2024 Order is still the operative one. Have an accountant check them
     # against the gazette before relying on a payroll run.
-    MIN_WAGE_NAIROBI_UNSKILLED = Decimal("16113.75")  # monthly
-    CASUAL_DAILY_RATE = Decimal("775.39")             # per day worked
+    MIN_WAGE_NAIROBI_UNSKILLED = Decimal("18047.40")  # monthly
+    CASUAL_DAILY_RATE = Decimal("868.44")             # per day worked
+    # Both are exclusive of the 15% housing allowance, which is added on top
+    # wherever they are used to compute pay.
 
     # The monthly minimum buys 225 hours, so it prorates: someone who works
     # fewer hours is owed proportionally less, and someone who works more is

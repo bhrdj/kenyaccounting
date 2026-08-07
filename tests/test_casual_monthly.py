@@ -12,10 +12,10 @@ from decimal import Decimal
 import pytest
 
 from src.calculators import (
-    PAYECalculator, casual_underpayment_warnings, stray_trial_payment_warnings,
+    PAYECalculator, trial_pay_reconciliation_warnings, stray_trial_payment_warnings,
     GrossCalculator, LeaveCalculator, PayrollEngine, default_leave_stock,
     month_split, overtime_trigger_warnings, weekly_hours_warnings,
-    MinimumWageValidator,
+    MinimumWageValidator, contract_coverage_warnings,
 )
 from src.models import Contract, Employee, LeaveStock, TimesheetDay
 from src.rates import StatutoryRates
@@ -70,53 +70,57 @@ class TestMonthSplit:
         assert frac == Decimal(5) / Decimal(31)
         assert casual_until == date(2026, 7, 26)
 
-    def test_start_after_month_end_is_all_casual(self):
-        frac, casual_until = month_split(contract(date(2026, 9, 1)), date(2026, 7, 28))
+    def test_start_after_month_end_is_all_casual_for_a_trial_worker(self):
+        c = contract(date(2026, 9, 1), casual_start=date(2026, 7, 1))
+        frac, casual_until = month_split(c, date(2026, 7, 28))
         assert frac == Decimal(0)
         assert casual_until == date(2026, 7, 31)
 
+    def test_future_start_without_a_trial_stays_monthly(self):
+        """A renewal dated next month is an employee, not a casual.
+
+        Only one contract row survives loading, so a renewal replaces the term
+        that covered this month. Treating that as a casual engagement would
+        pay a month of daily wages instead of a salary.
+        """
+        frac, casual_until = month_split(contract(date(2026, 9, 1)), date(2026, 7, 28))
+        assert frac == Decimal(1)
+        assert casual_until is None
+
 
 class TestCasualPay:
-    def test_casual_days_paid_per_day_worked(self):
-        """Days before the start date are paid only when actually worked."""
-        c = contract(date(2026, 7, 11))
-        # Three full casual days worked, plus the monthly period.
-        days = workdays([date(2026, 7, 6), date(2026, 7, 7), date(2026, 7, 8)])
-        gross = GrossCalculator(c, days, date(2026, 7, 28)).calculate()
+    """Trial days are paid at the statutory daily wage, plus housing."""
 
-        expected_casual = StatutoryRates.MIN_HOURLY_NAIROBI * Decimal("8.67") * 3
-        expected_monthly = c.base_salary * (Decimal(21) / Decimal(31))
-        expected = (expected_casual + expected_monthly) * Decimal("1.15")  # +housing
-        assert gross.total_gross == pytest.approx(expected, abs=Decimal("0.5"))
+    DAILY = None  # set in each test from StatutoryRates
 
-    def test_day_pays_hours_at_the_prorated_minimum(self):
-        c = contract(date(2026, 7, 11))
+    def _earned(self, days, start=date(2026, 7, 11)):
+        """Casual portion of gross, i.e. above the monthly baseline."""
+        c = contract(start)
         base = GrossCalculator(c, [], date(2026, 7, 28)).calculate().total_gross
-        one_day = GrossCalculator(
-            c, workdays([date(2026, 7, 6)]), date(2026, 7, 28)).calculate().total_gross
-        earned = (one_day - base) / Decimal("1.15")  # strip the housing uplift
+        got = GrossCalculator(c, days, date(2026, 7, 28)).calculate().total_gross
+        return got - base
+
+    def test_each_day_worked_earns_one_daily_rate_plus_housing(self):
+        expected = StatutoryRates.CASUAL_DAILY_RATE * 3 * Decimal("1.15")
+        earned = self._earned(workdays([date(2026, 7, 6), date(2026, 7, 7),
+                                        date(2026, 7, 8)]))
+        assert earned == pytest.approx(expected, abs=Decimal("0.5"))
+
+    def test_housing_is_added_on_top_not_netted_out(self):
+        """The gazetted daily rate excludes housing, so 15% goes on top."""
+        earned = self._earned(workdays([date(2026, 7, 6)]))
         assert earned == pytest.approx(
-            StatutoryRates.MIN_HOURLY_NAIROBI * Decimal("8.67"), abs=Decimal("0.5"))
+            StatutoryRates.CASUAL_DAILY_RATE * Decimal("1.15"), abs=Decimal("0.5"))
+        assert earned > StatutoryRates.CASUAL_DAILY_RATE
 
-    def test_short_trial_shift_pays_in_proportion(self):
-        """A half-day trial earns half a day's wage, not a whole one."""
-        c = contract(date(2026, 7, 11))
-        base = GrossCalculator(c, [], date(2026, 7, 28)).calculate().total_gross
-        half = workdays([date(2026, 7, 6)], hours=Decimal("4.335"))  # half of 8.67
-        earned = (GrossCalculator(c, half, date(2026, 7, 28)).calculate().total_gross
-                  - base) / Decimal("1.15")
-        assert earned == pytest.approx(
-            StatutoryRates.MIN_HOURLY_NAIROBI * Decimal("4.335"), abs=Decimal("0.5"))
+    def test_a_short_shift_still_earns_a_full_day(self):
+        """A daily wage buys the day, not the hours."""
+        short = self._earned(workdays([date(2026, 7, 6)], hours=Decimal("4")))
+        full = self._earned(workdays([date(2026, 7, 6)], hours=Decimal("9")))
+        assert short == full
 
-    def test_longer_day_earns_proportionally_more(self):
-        c = contract(date(2026, 7, 11))
-        base = GrossCalculator(c, [], date(2026, 7, 28)).calculate().total_gross
-        short = GrossCalculator(c, workdays([date(2026, 7, 6)], hours=Decimal("2")),
-                                date(2026, 7, 28)).calculate().total_gross
-        long_ = GrossCalculator(c, workdays([date(2026, 7, 6)], hours=Decimal("8")),
-                                date(2026, 7, 28)).calculate().total_gross
-        assert short > base
-        assert long_ > short
+    def test_a_day_with_no_hours_earns_nothing(self):
+        assert self._earned(workdays([date(2026, 7, 6)], hours=Decimal("0"))) == Decimal(0)
 
     def test_unworked_casual_days_cost_nothing(self):
         """No absence rows needed: a day not worked is simply not paid."""
@@ -138,72 +142,43 @@ class TestCasualPay:
         assert gross.baseline_base_pay == c.base_salary
 
 
-class TestTrialLumpSum:
-    """Trial days are settled as a round lump sum recorded per day."""
+class TestTrialPayReconciliation:
+    """Cash handed over is reconciled against the daily wage owed."""
 
-    def _earned(self, days):
+    def _warn(self, days):
+        return trial_pay_reconciliation_warnings(
+            contract(date(2026, 7, 11)), days, date(2026, 7, 28))
+
+    def test_underpayment_reports_the_balance_owed(self):
+        days = workdays([date(2026, 7, 6)])
+        days[0].temp_daily_pay = Decimal("300")
+        w = self._warn(days)
+        assert len(w) == 1 and "still owed" in w[0]
+
+    def test_overpayment_reports_the_advance(self):
+        days = workdays([date(2026, 7, 6)])
+        days[0].temp_daily_pay = Decimal("2000")
+        w = self._warn(days)
+        assert len(w) == 1 and "advanced beyond entitlement" in w[0]
+
+    def test_paying_the_full_entitlement_is_silent(self):
+        days = workdays([date(2026, 7, 6)])
+        days[0].temp_daily_pay = (StatutoryRates.CASUAL_DAILY_RATE
+                                  * Decimal("1.15")).quantize(Decimal("0.01"))
+        assert self._warn(days) == []
+
+    def test_cash_recorded_does_not_change_taxable_pay(self):
+        """The daily wage governs; what was handed over does not."""
+        plain = workdays([date(2026, 7, 6)])
+        with_cash = workdays([date(2026, 7, 6)])
+        with_cash[0].temp_daily_pay = Decimal("300")
         c = contract(date(2026, 7, 11))
-        base = GrossCalculator(c, [], date(2026, 7, 28)).calculate().total_gross
-        got = GrossCalculator(c, days, date(2026, 7, 28)).calculate().total_gross
-        return (got - base) / Decimal("1.15")  # strip the housing uplift
+        a = GrossCalculator(c, plain, date(2026, 7, 28)).calculate().total_gross
+        b = GrossCalculator(c, with_cash, date(2026, 7, 28)).calculate().total_gross
+        assert a == b
 
-    def test_recorded_lump_sum_is_paid_as_entered(self):
-        days = workdays([date(2026, 7, 6)], hours=Decimal("6.5"))
-        days[0].temp_daily_pay = Decimal("600")
-        assert self._earned(days) == pytest.approx(Decimal("600"), abs=Decimal("0.5"))
-
-    def test_lump_sums_add_up_across_days(self):
-        days = workdays([date(2026, 7, 6), date(2026, 7, 7)], hours=Decimal("6.5"))
-        for d in days:
-            d.temp_daily_pay = Decimal("600")
-        assert self._earned(days) == pytest.approx(Decimal("1200"), abs=Decimal("0.5"))
-
-    def test_lump_sum_overrides_the_hourly_calculation(self):
-        """A round figure is paid even where it differs from hours x rate."""
-        days = workdays([date(2026, 7, 6)], hours=Decimal("8.67"))  # would be 775.39
-        days[0].temp_daily_pay = Decimal("800")
-        assert self._earned(days) == pytest.approx(Decimal("800"), abs=Decimal("0.5"))
-
-    def test_missing_lump_sum_falls_back_to_the_prorated_minimum(self):
-        """A forgotten entry must not underpay: the lawful amount applies."""
-        days = workdays([date(2026, 7, 6)])  # full 8.67h day, no amount recorded
-        assert self._earned(days) == pytest.approx(
-            StatutoryRates.MIN_HOURLY_NAIROBI * Decimal("8.67"), abs=Decimal("0.5"))
-
-    def test_mixed_recorded_and_missing_days(self):
-        days = workdays([date(2026, 7, 6), date(2026, 7, 7)])
-        days[0].temp_daily_pay = Decimal("600")  # recorded
-        expected = (Decimal("600")  # recorded
-                    + StatutoryRates.MIN_HOURLY_NAIROBI * Decimal("8.67"))  # falls back
-        assert self._earned(days) == pytest.approx(expected, abs=Decimal("0.5"))
-
-
-class TestCasualUnderpaymentWarning:
-    def _warn(self, hours, pay):
-        c = contract(date(2026, 7, 11))
-        days = workdays([date(2026, 7, 6)], hours=Decimal(str(hours)))
-        days[0].temp_daily_pay = Decimal(str(pay))
-        return casual_underpayment_warnings(c, days, date(2026, 7, 28))
-
-    def test_lump_sum_below_minimum_for_the_hours_is_flagged(self):
-        # 600 for a full 8.67h day is 69.20/hr, under the 89.43 minimum.
-        w = self._warn("8.67", 600)
-        assert len(w) == 1
-        assert "below the minimum" in w[0]
-
-    def test_lump_sum_above_minimum_is_not_flagged(self):
-        # 600 for 6.5h is 92.31/hr, comfortably above.
-        assert self._warn("6.5", 600) == []
-
-    def test_full_day_at_the_daily_minimum_is_not_flagged(self):
-        assert self._warn("8.67", "775.39") == []
-
-    def test_days_after_the_start_date_are_not_checked(self):
-        """Once on monthly terms, the daily casual floor no longer applies."""
-        c = contract(date(2026, 7, 11))
-        days = workdays([date(2026, 7, 20)], hours=Decimal("8.67"))
-        days[0].temp_daily_pay = Decimal("100")
-        assert casual_underpayment_warnings(c, days, date(2026, 7, 28)) == []
+    def test_nothing_worked_and_nothing_paid_is_silent(self):
+        assert self._warn([]) == []
 
 
 class TestCasualOnlyWorker:
@@ -217,14 +192,14 @@ class TestCasualOnlyWorker:
         assert frac == Decimal(0)
         assert casual_until == date(2026, 7, 31)
 
-    def test_paid_only_from_recorded_trial_amounts(self):
+    def test_paid_at_the_daily_wage_for_days_worked(self):
         c = self._c()
         days = workdays([date(2026, 7, 29), date(2026, 7, 30)], hours=Decimal("8"))
         for d in days:
-            d.temp_daily_pay = Decimal("300")
+            d.temp_daily_pay = Decimal("300")  # cash given, does not govern
         gross = GrossCalculator(c, days, date(2026, 7, 28)).calculate()
-        assert gross.total_gross == pytest.approx(Decimal("600") * Decimal("1.15"),
-                                                  abs=Decimal("0.5"))
+        expected = StatutoryRates.CASUAL_DAILY_RATE * 2 * Decimal("1.15")
+        assert gross.total_gross == pytest.approx(expected, abs=Decimal("0.5"))
 
     def test_no_monthly_salary_leaks_in(self):
         """A blank start_date must never be read as a full month's salary."""
@@ -267,8 +242,8 @@ class TestStrayTrialPayments:
 
 
 class TestAccrualProration:
-    def _alloc(self, start):
-        c = contract(start)
+    def _alloc(self, start, casual_start=None):
+        c = contract(start, casual_start=casual_start)
         frac, _ = month_split(c, date(2026, 7, 28))
         stock = LeaveStock(employee_id=99, sick_full_pay=Decimal(0),
                            sick_half_pay=Decimal(0), annual_leave=Decimal(0),
@@ -291,7 +266,7 @@ class TestAccrualProration:
         assert updated.sick_full_pay == pytest.approx(expected, abs=Decimal("0.001"))
 
     def test_wholly_casual_month_accrues_nothing(self):
-        updated = self._alloc(date(2026, 9, 1)).updated_stock
+        updated = self._alloc(date(2026, 9, 1), casual_start=date(2026, 7, 1)).updated_stock
         assert updated.annual_leave == Decimal(0)
         assert updated.sick_full_pay == Decimal(0)
 
@@ -353,7 +328,7 @@ class TestTaxTreatment:
         emp = Employee(employee_id=99, name="Test", national_id="1", kra_pin="A1",
                        phone="", bank_account="1", nssf_no="1", shif_no="1")
         # Monthly contract starts next month, so July is wholly casual.
-        c = contract(date(2026, 8, 1))
+        c = contract(date(2026, 8, 1), casual_start=date(2026, 7, 1))
         days = workdays([date(2026, 7, 6), date(2026, 7, 7), date(2026, 7, 8)])
         stock = default_leave_stock(99, c, date(2026, 7, 28))
 
@@ -432,9 +407,39 @@ class TestEffectiveHourlyMinimum:
         assert ok
 
     def test_shortfall_amount_is_reported(self):
-        ok, msg = self._validate(6000, 100)  # 60.00/hr vs 71.62 -> 1,161.67 short
-        assert not ok and "1,161" in msg
+        ok, msg = self._validate(6000, 100)  # 60.00/hr vs 80.21 -> 2,021 short
+        assert not ok and "2,021" in msg
 
     def test_no_hours_recorded_is_not_flagged(self):
         ok, _ = self._validate(0, 0)
         assert ok
+
+
+class TestContractCoverage:
+    def test_renewal_dated_after_the_month_is_flagged(self):
+        c = contract(date(2026, 8, 4))
+        w = contract_coverage_warnings(c, date(2026, 7, 28))
+        assert len(w) == 1 and "after this payroll month" in w[0]
+
+    def test_expired_contract_is_flagged(self):
+        c = contract(date(2025, 1, 1))
+        c.end_date = date(2026, 6, 30)
+        w = contract_coverage_warnings(c, date(2026, 7, 28))
+        assert len(w) == 1 and "before this payroll month" in w[0]
+
+    def test_a_covering_contract_is_silent(self):
+        assert contract_coverage_warnings(contract(date(2026, 1, 1)), date(2026, 7, 28)) == []
+
+    def test_a_trial_worker_is_not_flagged(self):
+        """casual_start means the casual path is intended, not a gap."""
+        c = contract(None, casual_start=date(2026, 7, 28))
+        assert contract_coverage_warnings(c, date(2026, 7, 28)) == []
+
+    def test_renewal_is_still_paid_a_full_salary(self):
+        """The bug this guards: a month of daily wages instead of a salary."""
+        renewal = contract(date(2026, 8, 4))
+        normal = contract(date(2026, 1, 1))
+        days = workdays([date(2026, 7, d) for d in range(6, 30)], hours=Decimal("9"))
+        a = GrossCalculator(renewal, days, date(2026, 7, 28)).calculate().total_gross
+        b = GrossCalculator(normal, days, date(2026, 7, 28)).calculate().total_gross
+        assert a == b

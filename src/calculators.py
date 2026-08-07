@@ -135,24 +135,27 @@ class GrossCalculator:
         # employee who has not started yet costs nothing for the days they were
         # not on site, without anyone having to enter absence rows for them.
         #
-        # Trial days are settled as a round lump sum, recorded per day in the
-        # attendance sheet: a round figure communicates "this is a trial" in a
-        # way a computed amount does not. Where none is recorded, hours are
-        # paid at the prorated minimum instead, so a forgotten entry underpays
-        # nobody.
-        temp_daily_pay = Decimal(0)
-        if casual_until is not None:
-            for d in self.timesheet_days:
-                if not in_casual_window(self.contract, d.date, casual_until):
-                    continue
-                if d.temp_daily_pay > 0:
-                    temp_daily_pay += d.temp_daily_pay
-                else:
-                    temp_daily_pay += (StatutoryRates.MIN_HOURLY_NAIROBI
-                                       * d.hours_normal)
+        # Working-trial days are paid on the daily wage: one day's rate for
+        # each day worked, taken from the attendance sheet. What was actually
+        # handed over in cash is recorded in temp_daily_pay, but it does not
+        # govern -- taxable pay is what the statutory rate entitles them to,
+        # and the difference between the two is reported for settlement.
+        casual_days = casual_days_worked(self.contract, self.timesheet_days,
+                                         casual_until)
+        casual_base = StatutoryRates.CASUAL_DAILY_RATE * casual_days
 
-        earned = self.contract.base_salary * monthly_fraction + temp_daily_pay
-        actual_base, housing_allowance, total_gross = self._compute_housing(earned)
+        monthly_base, monthly_housing, monthly_gross = self._compute_housing(
+            self.contract.base_salary * monthly_fraction)
+
+        # The gazetted daily rate excludes housing, so the allowance is always
+        # added on top -- never netted out of it, whatever salary_basis says
+        # about how the monthly salary is quoted.
+        casual_housing = (Decimal(0) if self.contract.housing_type in ("quarters", "dorm")
+                          else casual_base * self.HOUSING_RATE)
+
+        actual_base = monthly_base + casual_base
+        housing_allowance = monthly_housing + casual_housing
+        total_gross = monthly_gross + casual_base + casual_housing
 
         # Baseline stays the full-time monthly figure so the summary table can
         # show what a complete month would have cost.
@@ -229,9 +232,13 @@ def month_split(contract: Contract, payroll_date: date | None) -> tuple[Decimal,
     days_in_month = monthrange(payroll_date.year, payroll_date.month)[1]
     last = date(payroll_date.year, payroll_date.month, days_in_month)
 
-    if contract.start_date is None:
-        # No monthly contract yet. Someone on working trial is wholly casual;
-        # a contract with neither date is legacy data, treated as monthly.
+    # Casual treatment is only ever right for someone with a casual_start.
+    # Without one, a start_date that does not cover this month means a
+    # renewal whose previous term is no longer in the sheet -- an established
+    # employee, not a casual. Paying them a month of daily wages instead of
+    # their salary would be badly wrong, so they stay on monthly terms and
+    # contract_coverage_warnings reports the gap.
+    if contract.start_date is None or contract.start_date > last:
         if contract.casual_start is None:
             return Decimal(1), None
         return Decimal(0), last
@@ -239,10 +246,6 @@ def month_split(contract: Contract, payroll_date: date | None) -> tuple[Decimal,
     start = contract.start_date
     if start <= first:
         return Decimal(1), None
-    if start > last:
-        # Monthly contract has not begun; the whole month is casual.
-        return Decimal(0), last
-
     monthly_days = (last - start).days + 1
     return Decimal(monthly_days) / Decimal(days_in_month), start - timedelta(days=1)
 
@@ -586,6 +589,50 @@ def weekly_hours_warnings(timesheet_days: list[TimesheetDay]) -> list[str]:
     return out
 
 
+def contract_coverage_warnings(
+    contract: Contract, payroll_date: date | None,
+) -> list[str]:
+    """Flag a payroll month the contract on file does not actually cover.
+
+    Only one contract row per employee survives loading, so a renewal
+    replaces the term that covered earlier months. The month is still paid on
+    monthly terms -- an established employee is not a casual -- but the gap
+    is worth knowing about when the payslip is questioned later.
+    """
+    if payroll_date is None or contract.casual_start is not None:
+        return []
+    first = date(payroll_date.year, payroll_date.month, 1)
+    last = date(payroll_date.year, payroll_date.month,
+                monthrange(payroll_date.year, payroll_date.month)[1])
+
+    if contract.start_date is not None and contract.start_date > last:
+        return [f"Contract on file starts {contract.start_date}, after this payroll "
+                f"month. Paid on monthly terms from the same salary; the term "
+                f"covering this month is not in the sheet."]
+    if contract.end_date is not None and contract.end_date < first:
+        return [f"Contract on file ended {contract.end_date}, before this payroll "
+                f"month. Paid on monthly terms from the same salary; check whether "
+                f"a renewal is missing."]
+    return []
+
+
+def casual_days_worked(contract: Contract, timesheet_days: list[TimesheetDay],
+                       casual_until: date | None) -> int:
+    """Count working-trial days worked, for payment at the daily wage.
+
+    Any day with hours recorded counts as one day: a daily wage is
+    consideration for turning up, not for a count of hours. Real trial days
+    run 8-9 hours, so part-days are not the normal case -- but a short shift
+    does earn a full day's rate under this rule.
+    """
+    if casual_until is None:
+        return 0
+    return sum(
+        1 for d in timesheet_days
+        if in_casual_window(contract, d.date, casual_until) and d.hours_normal > 0
+    )
+
+
 def in_casual_window(contract: Contract, day: date, casual_until: date) -> bool:
     """Is `day` inside the working-trial period this contract was paid for?
 
@@ -627,35 +674,42 @@ def stray_trial_payment_warnings(
     return out
 
 
-def casual_underpayment_warnings(
+def trial_pay_reconciliation_warnings(
     contract: Contract, timesheet_days: list[TimesheetDay], payroll_date: date | None,
 ) -> list[str]:
-    """Flag trial days whose lump sum falls below the gazetted hourly minimum.
+    """Reconcile cash already handed over against the daily wage now owed.
 
-    Only days with both an amount and hours recorded can be checked; a lump
-    sum with no hours beside it is unverifiable, not necessarily wrong.
+    temp_daily_pay records what a trial worker was actually given, usually a
+    round figure settled on the day. It no longer sets their pay: the daily
+    wage does. So the two can differ, and the difference is real money owed
+    or already advanced -- reported here rather than left to be noticed.
     """
     _, casual_until = month_split(contract, payroll_date)
     if casual_until is None:
         return []
 
-    hourly_min = StatutoryRates.MIN_HOURLY_NAIROBI
+    paid = sum(d.temp_daily_pay for d in timesheet_days
+               if in_casual_window(contract, d.date, casual_until))
+    days = casual_days_worked(contract, timesheet_days, casual_until)
+    if days == 0 and paid == 0:
+        return []
 
-    out = []
-    for d in timesheet_days:
-        if d.temp_daily_pay <= 0 or d.hours_normal <= 0:
-            continue
-        if not in_casual_window(contract, d.date, casual_until):
-            continue
-        rate = d.temp_daily_pay / d.hours_normal
-        if rate < hourly_min:
-            out.append(
-                f"Trial day {d.date}: KES {d.temp_daily_pay:,.2f} for "
-                f"{d.hours_normal:g}h is KES {rate:,.2f}/hr, below the minimum "
-                f"KES {hourly_min:,.2f}/hr. Lawful minimum for these hours is "
-                f"KES {hourly_min * d.hours_normal:,.2f}."
-            )
-    return out
+    owed = StatutoryRates.CASUAL_DAILY_RATE * days
+    owed_gross = owed * (Decimal(1) + GrossCalculator.HOUSING_RATE)
+    diff = owed_gross - paid
+    if abs(diff) < Decimal("1"):
+        return []
+
+    if diff > 0:
+        return [
+            f"Trial pay: {days} day(s) at KES {StatutoryRates.CASUAL_DAILY_RATE:,.2f} "
+            f"plus housing is KES {owed_gross:,.2f}, but KES {paid:,.2f} was paid in "
+            f"cash. KES {diff:,.2f} still owed."
+        ]
+    return [
+        f"Trial pay: KES {paid:,.2f} was paid in cash but only KES {owed_gross:,.2f} "
+        f"is owed for {days} day(s). KES {-diff:,.2f} advanced beyond entitlement."
+    ]
 
 
 def default_leave_stock(employee_id: int, contract: Contract, payroll_date: date) -> LeaveStock:
@@ -773,17 +827,16 @@ class PayrollEngine:
         if not is_valid and warning:
             warnings.append(warning)
 
-        # 9b. A trial lump sum has to clear the gazetted hourly minimum for the
-        # hours recorded beside it. The hours are documented for thoroughness,
-        # which cuts both ways: they are also the evidence if a round figure
-        # turns out to be below the wage floor for the day it covered.
-        warnings.extend(casual_underpayment_warnings(
+        # 9b. Trial days are paid at the statutory daily wage; whatever cash
+        # was handed over on the day is reconciled against it.
+        warnings.extend(trial_pay_reconciliation_warnings(
             contract, timesheet_days, self.payroll_date))
         warnings.extend(stray_trial_payment_warnings(
             contract, timesheet_days, self.payroll_date))
 
         # 9c. Working-time limits. Overtime is entered by hand, so nothing
         # else notices a day or a week that ran past the statutory maximum.
+        warnings.extend(contract_coverage_warnings(contract, self.payroll_date))
         warnings.extend(overtime_trigger_warnings(timesheet_days))
         warnings.extend(weekly_hours_warnings(timesheet_days))
 
