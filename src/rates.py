@@ -143,6 +143,26 @@ class StatutoryRates:
     # against the gazette before relying on a payroll run.
     MIN_WAGE_NAIROBI_UNSKILLED = Decimal("16113.75")  # monthly
     CASUAL_DAILY_RATE = Decimal("775.39")             # per day worked
+    MIN_HOURLY_NAIROBI = Decimal("77.54")             # per hour
+    #
+    # The three published figures do not reconcile with each other, so which
+    # one a check divides by changes the answer:
+    #   monthly / daily  = 20.78 days per month
+    #   daily / hourly   = 10.00 hours per day
+    #   monthly / hourly = 207.8 hours per month, against the Ministry's 225.33
+    # Giving an effective hourly floor of 71.51 (monthly basis), 77.54
+    # (published) or 89.43 (daily basis). The published hourly rate is used
+    # for the monthly effective-rate test because it is the figure the Order
+    # states for an hours-based comparison; the daily rate is used for
+    # per-day trial checks, where the daily floor is what applies. Worth an
+    # accountant's view -- picking the 89.43 basis everywhere would be the
+    # conservative choice.
+
+    # Working time, per the Regulation of Wages Order. Hours beyond either
+    # threshold are overtime: 1.5x on weekdays, 2.0x on rest days and
+    # gazetted holidays.
+    DAILY_HOURS_BEFORE_OT = Decimal("9")
+    WEEKLY_HOURS_BEFORE_OT = Decimal("52")  # weeks run Monday to Sunday
 
     # Housing allowance rate (per Employment Act Section 31)
     HOUSING_ALLOWANCE_RATE = Decimal("0.15")

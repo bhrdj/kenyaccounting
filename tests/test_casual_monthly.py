@@ -14,7 +14,8 @@ import pytest
 from src.calculators import (
     PAYECalculator, casual_underpayment_warnings, stray_trial_payment_warnings,
     GrossCalculator, LeaveCalculator, PayrollEngine, default_leave_stock,
-    month_split,
+    month_split, overtime_trigger_warnings, weekly_hours_warnings,
+    MinimumWageValidator,
 )
 from src.models import Contract, Employee, LeaveStock, TimesheetDay
 from src.rates import StatutoryRates
@@ -361,3 +362,77 @@ class TestTaxTreatment:
         assert ps.deductions.nssf_tier_1 < rates.nssf_lel * rates.nssf_rate
         assert ps.deductions.nssf_tier_2 == Decimal(0)
         assert ps.deductions.paye == Decimal(0)  # far below the PAYE threshold
+
+
+class TestWorkingTimeLimits:
+    """9h/day and 52h/week (Mon-Sun), per the Regulation of Wages Order."""
+
+    def test_day_over_nine_hours_without_overtime_is_flagged(self):
+        days = workdays([date(2026, 7, 6)], hours=Decimal("10"))
+        w = overtime_trigger_warnings(days)
+        assert len(w) == 1 and "exceeds the 9h daily limit by 1h" in w[0]
+
+    def test_exactly_nine_hours_is_fine(self):
+        assert overtime_trigger_warnings(workdays([date(2026, 7, 6)], hours=Decimal("9"))) == []
+
+    def test_excess_recorded_as_overtime_is_not_flagged(self):
+        days = workdays([date(2026, 7, 6)], hours=Decimal("10"))
+        days[0].hours_ot_1_5 = Decimal("1")
+        assert overtime_trigger_warnings(days) == []
+
+    def test_partial_overtime_still_flags_the_remainder(self):
+        days = workdays([date(2026, 7, 6)], hours=Decimal("12"))
+        days[0].hours_ot_1_5 = Decimal("1")  # 3h over, only 1h recorded
+        assert len(overtime_trigger_warnings(days)) == 1
+
+    def test_week_over_fifty_two_hours_is_flagged(self):
+        # Mon 6 Jul to Sat 11 Jul, six 9-hour days = 54h.
+        days = workdays([date(2026, 7, d) for d in range(6, 12)], hours=Decimal("9"))
+        w = weekly_hours_warnings(days)
+        assert len(w) == 1
+        assert "2026-07-06 (Mon-Sun)" in w[0] and "54h" in w[0]
+
+    def test_week_at_the_limit_is_fine(self):
+        days = workdays([date(2026, 7, d) for d in range(6, 11)], hours=Decimal("10.4"))
+        assert weekly_hours_warnings(days) == []  # 5 x 10.4 = 52h exactly
+
+    def test_weeks_are_counted_monday_to_sunday(self):
+        """Sunday closes a week; the following Monday opens the next one."""
+        days = (workdays([date(2026, 7, d) for d in range(6, 13)], hours=Decimal("7"))  # Mon-Sun = 49h
+                + workdays([date(2026, 7, 13)], hours=Decimal("9")))  # next Monday
+        assert weekly_hours_warnings(days) == []
+
+    def test_overtime_hours_count_toward_the_weekly_total(self):
+        days = workdays([date(2026, 7, d) for d in range(6, 11)], hours=Decimal("9"))  # 45h
+        days[0].hours_ot_1_5 = Decimal("8")  # 53h total
+        assert len(weekly_hours_warnings(days)) == 1
+
+
+class TestEffectiveHourlyMinimum:
+    """Minimum wage is tested as total pay over total hours."""
+
+    def _validate(self, pay, hours):
+        v = MinimumWageValidator(Decimal(str(pay)), contract(date(2026, 1, 1)),
+                                 Decimal(str(hours)), date(2026, 7, 28))
+        return v.validate()
+
+    def test_below_the_hourly_floor_is_flagged(self):
+        ok, msg = self._validate(10000, 200)  # 50.00/hr
+        assert not ok and "below the minimum" in msg
+
+    def test_above_the_hourly_floor_passes(self):
+        ok, _ = self._validate(20000, 200)  # 100.00/hr
+        assert ok
+
+    def test_part_timer_on_a_fair_rate_is_not_flagged(self):
+        """Few hours must not read as underpayment: this is why hours matter."""
+        ok, _ = self._validate(5000, 50)  # 100.00/hr on a short month
+        assert ok
+
+    def test_shortfall_amount_is_reported(self):
+        ok, msg = self._validate(7000, 100)  # 70/hr vs 77.54 -> 754 short
+        assert not ok and "754" in msg
+
+    def test_no_hours_recorded_is_not_flagged(self):
+        ok, _ = self._validate(0, 0)
+        assert ok

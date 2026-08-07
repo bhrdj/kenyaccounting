@@ -523,20 +523,70 @@ class MinimumWageValidator:
                 )
             return True, None
         else:
-            # For fixed monthly, check actual base pay. A mid-month starter is
-            # only on monthly terms for part of the month, so the floor is
-            # prorated to match -- otherwise every new hire trips this. Their
-            # casual days are checked separately, against the daily rate.
-            monthly_fraction, _ = month_split(self.contract, self.payroll_date)
-            threshold = self.MIN_WAGE_NAIROBI * monthly_fraction
-            if self.base_pay < threshold:
-                period = ("" if monthly_fraction == 1
-                          else f" for {monthly_fraction * 100:.0f}% of the month")
+            # Compare what was actually earned against what was actually
+            # worked, rather than a part-month's pay against a whole month's
+            # floor. Dividing by hours handles mid-month starters, part-timers
+            # and casual-to-monthly transitions without any proration: the
+            # effective rate is the thing the law cares about either way.
+            if self.hours_worked <= 0:
+                return True, None
+            effective = self.base_pay / self.hours_worked
+            floor = StatutoryRates.MIN_HOURLY_NAIROBI
+            if effective < floor:
+                shortfall = (floor - effective) * self.hours_worked
                 return False, (
-                    f"Base pay KES {self.base_pay:,.2f} is below the Nairobi minimum "
-                    f"wage{period} of KES {threshold:,.2f}. Is this employee part-time?"
+                    f"Effective rate KES {effective:,.2f}/hr "
+                    f"(KES {self.base_pay:,.2f} for {self.hours_worked:g}h) is below "
+                    f"the minimum KES {floor:,.2f}/hr. Short by "
+                    f"KES {shortfall:,.2f} this month."
                 )
             return True, None
+
+
+def overtime_trigger_warnings(timesheet_days: list[TimesheetDay]) -> list[str]:
+    """Flag days over the 9-hour threshold with no overtime recorded.
+
+    Overtime is entered by hand in hrs_ot_1_5 / hrs_ot_2_0; nothing derives it
+    from hrs_wrkd. So a 10-hour day recorded entirely as normal hours is paid
+    as normal hours, and only this check will say so.
+    """
+    limit = StatutoryRates.DAILY_HOURS_BEFORE_OT
+    out = []
+    for d in sorted(timesheet_days, key=lambda x: x.date):
+        recorded_ot = d.hours_ot_1_5 + d.hours_ot_2_0
+        excess = d.hours_normal - limit
+        if excess > 0 and recorded_ot < excess:
+            out.append(
+                f"{d.date}: {d.hours_normal:g}h worked exceeds the {limit:g}h daily "
+                f"limit by {excess:g}h, but only {recorded_ot:g}h is recorded as "
+                f"overtime. The excess is being paid at normal rate."
+            )
+    return out
+
+
+def weekly_hours_warnings(timesheet_days: list[TimesheetDay]) -> list[str]:
+    """Flag Monday-to-Sunday weeks exceeding the 52-hour statutory maximum.
+
+    Weeks straddling a month boundary are only partly visible in a single
+    payroll run, so their totals are understated -- this can miss a breach at
+    the edges, never invent one.
+    """
+    limit = StatutoryRates.WEEKLY_HOURS_BEFORE_OT
+    weeks: dict[tuple[int, int], Decimal] = {}
+    for d in timesheet_days:
+        iso = d.date.isocalendar()  # ISO weeks run Monday to Sunday
+        key = (iso[0], iso[1])
+        weeks[key] = weeks.get(key, Decimal(0)) + d.hours_normal + d.hours_ot_1_5 + d.hours_ot_2_0
+
+    out = []
+    for (iso_year, iso_week), total in sorted(weeks.items()):
+        if total > limit:
+            monday = date.fromisocalendar(iso_year, iso_week, 1)
+            out.append(
+                f"Week of {monday} (Mon-Sun): {total:g}h worked exceeds the "
+                f"{limit:g}h weekly maximum by {total - limit:g}h."
+            )
+    return out
 
 
 def in_casual_window(contract: Contract, day: date, casual_until: date) -> bool:
@@ -737,6 +787,11 @@ class PayrollEngine:
             contract, timesheet_days, self.payroll_date))
         warnings.extend(stray_trial_payment_warnings(
             contract, timesheet_days, self.payroll_date))
+
+        # 9c. Working-time limits. Overtime is entered by hand, so nothing
+        # else notices a day or a week that ran past the statutory maximum.
+        warnings.extend(overtime_trigger_warnings(timesheet_days))
+        warnings.extend(weekly_hours_warnings(timesheet_days))
 
         # 10. Format period string
         period = self.payroll_date.strftime("%B %Y")
