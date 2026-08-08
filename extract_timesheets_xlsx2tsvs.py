@@ -23,10 +23,22 @@ from pathlib import Path
 import openpyxl
 
 
+# The first two columns are read positionally: their header cells are
+# unreliable across tabs (variously "date", "Date", blank, or a stray number).
+# Everything after is matched by header name, because the optional columns do
+# not sit at the same index on every tab -- notes is column 8 on one tab and 9
+# on another, so reading by position would silently mix them up.
 HEADER = [
     "date", "wkdy", "hrs_norm", "hrs_wrkd",
     "hrs_miss", "hrs_sik", "hrs_ot_1_5", "hrs_ot_2_0",
+    # One-off money adjustments for the month, e.g. a completion bonus or a
+    # correction for holidays worked in an earlier period. Both are taxable;
+    # they differ only in whether the 15% housing allowance applies on top.
+    "adj_with_housing", "adj_no_housing",
+    "notes",
 ]
+
+_BY_NAME = HEADER[2:]
 
 
 def _fmt_date(v):
@@ -39,6 +51,10 @@ def _fmt_wkdy(v):
     if isinstance(v, datetime):
         return v.strftime("%a")
     return v if v is not None else ""
+
+
+def _fmt_text(v):
+    return "" if v is None else str(v).strip()
 
 
 def _fmt_num(v):
@@ -64,6 +80,10 @@ def extract_month(xlsx_path: Path, dest_dir: Path, year: int, month: int,
     written = 0
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
+        header = [str(c).strip() if c is not None else ""
+                  for c in next(ws.iter_rows(min_row=1, max_row=1, values_only=True))]
+        index = {name: i for i, name in enumerate(header) if name}
+
         rows = []
         for row in ws.iter_rows(min_row=2, values_only=True):
             d = row[0]
@@ -71,16 +91,16 @@ def extract_month(xlsx_path: Path, dest_dir: Path, year: int, month: int,
                 continue
             if d.year != year or d.month != month:
                 continue
-            rows.append([
-                _fmt_date(d),
-                _fmt_wkdy(row[1]),
-                _fmt_num(row[2]),
-                _fmt_num(row[3]),
-                _fmt_num(row[4]),
-                _fmt_num(row[5]),
-                _fmt_num(row[6]),
-                _fmt_num(row[7]),
-            ])
+
+            def cell(name):
+                i = index.get(name)
+                return row[i] if i is not None and i < len(row) else None
+
+            rows.append(
+                [_fmt_date(d), _fmt_wkdy(row[1])]
+                + [_fmt_text(cell(n)) if n == "notes" else _fmt_num(cell(n))
+                   for n in _BY_NAME]
+            )
 
         out_path = dest_dir / f"{sheet_name}.tsv"
         with open(out_path, "w", newline="") as f:

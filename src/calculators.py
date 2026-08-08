@@ -152,9 +152,19 @@ class GrossCalculator:
         casual_housing = (Decimal(0) if self.contract.housing_type in ("quarters", "dorm")
                           else casual_base * self.HOUSING_RATE)
 
-        actual_base = monthly_base + casual_base
-        housing_allowance = monthly_housing + casual_housing
-        total_gross = monthly_gross + casual_base + casual_housing
+        # One-off adjustments for the month. Both are taxable pay and flow
+        # into gross like any other earning; only one attracts housing.
+        adj_with_housing = sum((d.adj_with_housing for d in self.timesheet_days),
+                               Decimal(0))
+        adj_no_housing = sum((d.adj_no_housing for d in self.timesheet_days),
+                             Decimal(0))
+        adj_housing = (Decimal(0) if self.contract.housing_type in ("quarters", "dorm")
+                       else adj_with_housing * self.HOUSING_RATE)
+
+        actual_base = monthly_base + casual_base + adj_with_housing + adj_no_housing
+        housing_allowance = monthly_housing + casual_housing + adj_housing
+        total_gross = (monthly_gross + casual_base + casual_housing
+                       + adj_with_housing + adj_housing + adj_no_housing)
 
         # Baseline stays the full-time monthly figure so the summary table can
         # show what a complete month would have cost.
@@ -169,6 +179,7 @@ class GrossCalculator:
             total_gross=total_gross,
             baseline_base_pay=baseline,
             worked_base_pay=actual_base,
+            adjustments=adj_with_housing + adj_housing + adj_no_housing,
         )
 
     def _calc_prorated_min_wage(self) -> GrossBreakdown:
@@ -775,6 +786,7 @@ class PayrollEngine:
             leave_half_pay_deduction=gross.leave_half_pay_deduction,
             leave_unpaid_deduction=gross.leave_unpaid_deduction,
             holiday_premium=gross.holiday_premium,
+            adjustments=gross.adjustments,
         )
 
         # 5. Calculate deductions (NSSF, SHIF, AHL)
@@ -879,6 +891,7 @@ class PayrollEngine:
             baseline_base_pay=gross.baseline_base_pay,
             worked_base_pay=gross.base_pay,
             leave_pay=leave_base,
+            adjustments=gross.adjustments,
         )
 
     def _apply_monthly_adjustments(
@@ -950,4 +963,5 @@ class PayrollEngine:
             leave_half_pay_deduction=half_pay_deduction,
             leave_unpaid_deduction=unpaid_deduction,
             holiday_premium=holiday_premium,
+            adjustments=gross.adjustments,
         )

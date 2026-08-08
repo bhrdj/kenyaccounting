@@ -78,6 +78,8 @@ class PayslipRenderer:
             lines.append(f"  Holiday premium       KES {payslip.gross.holiday_premium:>12,.2f}")
         if payslip.gross.housing_allowance > 0:
             lines.append(f"  Housing allowance     KES {payslip.gross.housing_allowance:>12,.2f}")
+        if payslip.gross.adjustments > 0:
+            lines.append(f"  Adjustments           KES {payslip.gross.adjustments:>12,.2f}")
         if payslip.gross.leave_half_pay_deduction > 0:
             lines.append(f"  Less: half-pay sick   KES {-payslip.gross.leave_half_pay_deduction:>12,.2f}")
         if payslip.gross.leave_unpaid_deduction > 0:

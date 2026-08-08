@@ -57,6 +57,11 @@ class TimesheetDay:
     hours_ot_2_0: Decimal
     absent: bool
     sick: bool
+    # One-off money adjustments for the month, recorded against a single day.
+    # Both are taxable pay; they differ only in whether the 15% housing
+    # allowance is computed on top.
+    adj_with_housing: Decimal = Decimal(0)
+    adj_no_housing: Decimal = Decimal(0)
 
 
 # Calculation Results
@@ -73,7 +78,8 @@ class GrossBreakdown:
     worked_base_pay: Decimal = Decimal(0)    # pay from hours actually worked (before leave pay)
     leave_pay: Decimal = Decimal(0)          # pay added for leave-covered hours
     leave_half_pay_deduction: Decimal = Decimal(0)  # deduction for half-pay sick days
-    leave_unpaid_deduction: Decimal = Decimal(0)    # deduction for unpaid leave days
+    leave_unpaid_deduction: Decimal = Decimal(0)
+    adjustments: Decimal = Decimal(0)      # one-off additions this month    # deduction for unpaid leave days
     holiday_premium: Decimal = Decimal(0)    # extra day's pay for working a public holiday
 
 

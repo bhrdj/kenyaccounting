@@ -430,3 +430,50 @@ class TestCasualDaysAreOutsideLeave:
         assert a.unpaid_hours == Decimal(0)
         assert a.updated_stock.annual_leave == Decimal(0)
         assert a.updated_stock.sick_full_pay == Decimal(0)
+
+
+class TestOneOffAdjustments:
+    """Month-specific additions, e.g. a completion bonus or back-pay."""
+
+    def _gross(self, with_h=Decimal(0), no_h=Decimal(0), housing_type="none"):
+        c = contract(date(2020, 1, 1), base=Decimal("50000"), housing_type=housing_type)
+        d = workdays([date(2026, 7, 31)], hours=Decimal("8"))[0]
+        d.adj_with_housing, d.adj_no_housing = with_h, no_h
+        return GrossCalculator(c, [d], date(2026, 7, 28)).calculate()
+
+    def test_no_adjustment_leaves_gross_alone(self):
+        assert self._gross().adjustments == Decimal(0)
+
+    def test_adjustment_with_housing_attracts_the_allowance(self):
+        g = self._gross(with_h=Decimal("17119"))
+        assert g.adjustments == Decimal("17119") * Decimal("1.15")
+
+    def test_adjustment_without_housing_does_not(self):
+        g = self._gross(no_h=Decimal("20000"))
+        assert g.adjustments == Decimal("20000")
+
+    def test_both_kinds_combine(self):
+        g = self._gross(with_h=Decimal("17119"), no_h=Decimal("20000"))
+        base = self._gross().total_gross
+        expected = Decimal("17119") * Decimal("1.15") + Decimal("20000")
+        assert g.total_gross - base == expected
+
+    def test_adjustments_are_taxable(self):
+        """They raise gross, so PAYE and the statutory deductions follow."""
+        emp = Employee(employee_id=2, name="T", national_id="1", kra_pin="A1",
+                       phone="", bank_account="1", nssf_no="1", shif_no="1")
+        c = contract(date(2020, 1, 1), base=Decimal("50000"))
+        plain = workdays([date(2026, 7, 31)], hours=Decimal("8"))
+        bumped = workdays([date(2026, 7, 31)], hours=Decimal("8"))
+        bumped[0].adj_no_housing = Decimal("20000")
+        eng = PayrollEngine(date(2026, 7, 28))
+        stock = default_leave_stock(2, c, date(2026, 7, 28))
+        a = eng.process(emp, c, plain, stock)
+        b = eng.process(emp, c, bumped, stock)
+        assert b.deductions.paye > a.deductions.paye
+        assert b.deductions.shif > a.deductions.shif
+
+    def test_employer_housing_suppresses_the_allowance(self):
+        """No cash allowance where quarters are provided."""
+        g = self._gross(with_h=Decimal("17119"), housing_type="quarters")
+        assert g.adjustments == Decimal("17119")
