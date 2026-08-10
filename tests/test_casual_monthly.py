@@ -14,7 +14,8 @@ import pytest
 from src.calculators import (
     PAYECalculator, casual_days_worked,
     GrossCalculator, LeaveCalculator, PayrollEngine, default_leave_stock,
-    month_split, overtime_trigger_warnings, weekly_hours_warnings,
+    month_split, monthly_period_start, overtime_trigger_warnings,
+    weekly_hours_warnings,
     MinimumWageValidator, contract_coverage_warnings,
 )
 from src.models import Contract, Employee, LeaveStock, TimesheetDay
@@ -386,11 +387,13 @@ class TestCasualDaysAreOutsideLeave:
 
     def _alloc(self, days, start=date(2026, 7, 27), casual_start=date(2026, 6, 25)):
         c = contract(start, casual_start=casual_start)
-        frac, casual_until = month_split(c, date(2026, 7, 28))
-        stock = LeaveStock(employee_id=99, sick_full_pay=Decimal(0),
-                           sick_half_pay=Decimal(0), annual_leave=Decimal(0),
+        frac, _ = month_split(c, date(2026, 7, 28))
+        stock = LeaveStock(employee_id=99, sick_full_pay=Decimal(5),
+                           sick_half_pay=Decimal(5), annual_leave=Decimal(5),
                            as_of_date=date(2026, 6, 30))
-        return LeaveCalculator(days, stock, c, frac, casual_until).allocate()
+        return LeaveCalculator(
+            days, stock, c, frac, monthly_period_start(c, date(2026, 7, 28)),
+            all_monthly=False).allocate()
 
     def _absent(self, day):
         return TimesheetDay(employee_id=99, date=day, hours_normal=Decimal(0),
@@ -421,12 +424,13 @@ class TestCasualDaysAreOutsideLeave:
 
     def test_a_wholly_casual_worker_accrues_and_uses_nothing(self):
         c = contract(None, base=Decimal(0), casual_start=date(2026, 7, 1))
-        frac, casual_until = month_split(c, date(2026, 7, 28))
+        frac, _ = month_split(c, date(2026, 7, 28))
         stock = LeaveStock(employee_id=99, sick_full_pay=Decimal(0),
                            sick_half_pay=Decimal(0), annual_leave=Decimal(0),
                            as_of_date=date(2026, 6, 30))
-        a = LeaveCalculator([self._absent(date(2026, 7, 8))], stock, c,
-                            frac, casual_until).allocate()
+        a = LeaveCalculator(
+            [self._absent(date(2026, 7, 8))], stock, c, frac,
+            monthly_period_start(c, date(2026, 7, 28)), all_monthly=False).allocate()
         assert a.unpaid_hours == Decimal(0)
         assert a.updated_stock.annual_leave == Decimal(0)
         assert a.updated_stock.sick_full_pay == Decimal(0)
@@ -477,3 +481,47 @@ class TestOneOffAdjustments:
         """No cash allowance where quarters are provided."""
         g = self._gross(with_h=Decimal("17119"), housing_type="quarters")
         assert g.adjustments == Decimal("17119")
+
+
+class TestLeaveStartsWithMonthlyTerms:
+    """Leave applies from start_date, not merely outside the casual window."""
+
+    def _alloc(self, day, casual_start=date(2026, 7, 7), start=date(2026, 7, 27)):
+        c = contract(start, casual_start=casual_start)
+        frac, _ = month_split(c, date(2026, 7, 28))
+        stock = LeaveStock(employee_id=99, sick_full_pay=Decimal(5),
+                           sick_half_pay=Decimal(5), annual_leave=Decimal(5),
+                           as_of_date=date(2026, 6, 30))
+        absent = TimesheetDay(employee_id=99, date=day, hours_normal=Decimal(0),
+                              hours_ot_1_5=Decimal(0), hours_ot_2_0=Decimal(0),
+                              absent=True, sick=False)
+        return LeaveCalculator(
+            [absent], stock, c, frac,
+            monthly_period_start(c, date(2026, 7, 28)), all_monthly=False).allocate()
+
+    def test_absence_before_the_trial_began_costs_no_leave(self):
+        """The gap this closes: 3 July is before casual_start, so before any
+        engagement at all -- it was still being charged as annual leave."""
+        a = self._alloc(date(2026, 7, 3))
+        assert a.annual_leave_used == Decimal(0)
+        assert a.unpaid_hours == Decimal(0)
+
+    def test_absence_during_the_trial_costs_no_leave(self):
+        a = self._alloc(date(2026, 7, 10))
+        assert a.annual_leave_used == Decimal(0)
+
+    def test_absence_on_monthly_terms_still_costs_leave(self):
+        a = self._alloc(date(2026, 7, 29))
+        assert a.annual_leave_used > 0
+
+    def test_monthly_period_start_is_the_contract_start(self):
+        c = contract(date(2026, 7, 27), casual_start=date(2026, 7, 7))
+        assert monthly_period_start(c, date(2026, 7, 28)) == date(2026, 7, 27)
+
+    def test_a_full_month_starts_at_the_first(self):
+        c = contract(date(2020, 1, 1))
+        assert monthly_period_start(c, date(2026, 7, 28)) == date(2026, 7, 1)
+
+    def test_a_wholly_casual_month_has_no_monthly_period(self):
+        c = contract(None, casual_start=date(2026, 7, 1))
+        assert monthly_period_start(c, date(2026, 7, 28)) is None

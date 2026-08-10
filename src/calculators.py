@@ -263,19 +263,21 @@ def month_split(contract: Contract, payroll_date: date | None) -> tuple[Decimal,
 class LeaveCalculator:
     def __init__(self, timesheet_days: list[TimesheetDay], leave_stock: LeaveStock,
                  contract: Contract, monthly_fraction: Decimal = Decimal(1),
-                 casual_until: date | None = None):
+                 monthly_from: date | None = None, all_monthly: bool = True):
         self.leave_stock = leave_stock
         self.contract = contract
-        # Leave is a feature of monthly employment, not of casual work. A
-        # casual is paid per day worked, so a day not worked is simply a day
-        # not paid -- there is nothing to deduct and no balance to draw on.
-        # Charging those days against leave would bill a new starter for days
-        # they were never engaged for, and drain a balance they have barely
-        # begun to accrue.
-        self.timesheet_days = [
-            d for d in timesheet_days
-            if casual_until is None or not in_casual_window(contract, d.date, casual_until)
-        ]
+        # Leave is a feature of monthly employment, and applies only from the
+        # day monthly terms begin. Before that a person is either on a working
+        # trial, paid per day worked so an unworked day is simply unpaid, or
+        # not yet engaged at all. Neither can consume a balance: charging them
+        # would bill a new starter for days they were never employed for, and
+        # drain what they have barely begun to accrue.
+        if all_monthly:
+            self.timesheet_days = list(timesheet_days)
+        elif monthly_from is None:
+            self.timesheet_days = []
+        else:
+            self.timesheet_days = [d for d in timesheet_days if d.date >= monthly_from]
         # Accrual likewise scales with the part of the month actually spent on
         # the monthly contract; casual days earn none.
         self.monthly_fraction = monthly_fraction
@@ -636,6 +638,22 @@ def contract_coverage_warnings(
     return []
 
 
+def monthly_period_start(contract: Contract, payroll_date: date | None) -> date | None:
+    """First date in the payroll month on monthly terms, or None if none are.
+
+    Leave keys off this: it is a feature of monthly employment and applies
+    from this date onward. Days before it fall into one of two categories --
+    a working trial paid per day, or a period before the person was engaged
+    at all -- and neither can consume a leave balance.
+    """
+    fraction, casual_until = month_split(contract, payroll_date)
+    if fraction == 0:
+        return None
+    if casual_until is None:
+        return date(payroll_date.year, payroll_date.month, 1)
+    return casual_until + timedelta(days=1)
+
+
 def casual_days_worked(contract: Contract, timesheet_days: list[TimesheetDay],
                        casual_until: date | None) -> int:
     """Count working-trial days worked, for payment at the daily wage.
@@ -689,6 +707,22 @@ def contract_coverage_warnings(
                 f"month. Paid on monthly terms from the same salary; check whether "
                 f"a renewal is missing."]
     return []
+
+
+def monthly_period_start(contract: Contract, payroll_date: date | None) -> date | None:
+    """First date in the payroll month on monthly terms, or None if none are.
+
+    Leave keys off this: it is a feature of monthly employment and applies
+    from this date onward. Days before it fall into one of two categories --
+    a working trial paid per day, or a period before the person was engaged
+    at all -- and neither can consume a leave balance.
+    """
+    fraction, casual_until = month_split(contract, payroll_date)
+    if fraction == 0:
+        return None
+    if casual_until is None:
+        return date(payroll_date.year, payroll_date.month, 1)
+    return casual_until + timedelta(days=1)
 
 
 def casual_days_worked(contract: Contract, timesheet_days: list[TimesheetDay],
@@ -757,9 +791,10 @@ class PayrollEngine:
         leave_stock: LeaveStock,
     ) -> PaySlip:
         # 1. Calculate leave allocation
-        monthly_fraction, casual_until = month_split(contract, self.payroll_date)
-        leave_calc = LeaveCalculator(timesheet_days, leave_stock, contract,
-                                     monthly_fraction, casual_until)
+        monthly_fraction, _ = month_split(contract, self.payroll_date)
+        leave_calc = LeaveCalculator(
+            timesheet_days, leave_stock, contract, monthly_fraction,
+            monthly_period_start(contract, self.payroll_date), all_monthly=False)
         leave = leave_calc.allocate()
 
         # 2. Calculate gross
