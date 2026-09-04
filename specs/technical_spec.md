@@ -56,7 +56,7 @@ Employee
 
 Contract
     employee_id: int
-    contract_type: str          # 'hourly', 'fixed_monthly', 'prorated_min_wage'
+    contract_type: str          # 'hourly', 'fixed_monthly', 'consolidated_leave', 'daily'
     base_salary: Decimal
     weekly_hours: int           # contractual weekly hours (all contract types)
     standard_workday_hours: Decimal  # for leave conversion (e.g., 8.0, 9.0)
@@ -210,14 +210,17 @@ GrossCalculator
 
         total = base_salary - sick_half_deduction - unpaid_deduction
 
-    _calc_prorated_min_wage(leave_alloc: LeaveAllocation) -> GrossBreakdown
-        std_monthly_hours = weekly_hours * 52 / 12
-        paid_hours = sum(hours_normal + hours_ot_1_5 + hours_ot_2_0)
-                     + leave_alloc.sick_full_pay_hours
-                     + leave_alloc.sick_half_pay_hours * 0.5
-                     + leave_alloc.annual_leave_hours
-        fraction = paid_hours / std_monthly_hours
-        base_pay = base_salary * fraction
+    _calc_daily() -> GrossBreakdown
+        # Paid from attendance hours. No monthly salary, and no leave:
+        # a daily engagement accrues none.
+        expected = 8 through Aug 2026, 9 from Sept 2026
+        earned = daily_rate * hours_worked / expected
+
+        # A day rate should not beat the wage for full monthly terms
+        if earned > monthly_salary and hours_worked < full_time_hours(52/wk):
+            earned = monthly_salary
+
+        housing_allowance = earned * 0.15   # the daily rate excludes housing
 ```
 
 ### LeaveCalculator

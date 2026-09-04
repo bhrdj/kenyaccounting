@@ -56,8 +56,15 @@ class GrossCalculator:
     def calculate(self) -> GrossBreakdown:
         if self.contract.contract_type in ("hourly", "consolidated_leave", "fixed_monthly"):
             return self._calc_fixed_monthly()
-        elif self.contract.contract_type == "prorated_min_wage":
-            return self._calc_prorated_min_wage()
+        elif self.contract.contract_type == "daily":
+            return self._calc_daily()
+        # Falling through used to return None, which surfaced far away as an
+        # AttributeError on the caller's `gross.total_gross`. Name the bad
+        # contract instead: the fix is always in the sheet.
+        raise ValueError(
+            f"Employee {self.contract.employee_id}: unknown contract_type "
+            f"{self.contract.contract_type!r}"
+        )
 
     def _compute_housing(self, base_pay: Decimal) -> tuple[Decimal, Decimal, Decimal]:
         """
@@ -182,42 +189,94 @@ class GrossCalculator:
             adjustments=adj_with_housing + adj_housing + adj_no_housing,
         )
 
-    def _calc_prorated_min_wage(self) -> GrossBreakdown:
+    def _monthly_equivalent_base(self) -> Decimal:
+        """The monthly salary this person would be on, exclusive of housing.
+
+        A daily row usually carries no monthly figure, so the statutory
+        monthly minimum stands in: it is what the monthly staff doing the
+        same work are paid, and like the day rate it excludes housing. Where
+        a monthly salary *is* recorded, that is the better comparison.
+        """
+        if self.contract.base_salary > 0:
+            return self.contract.base_salary
+        return StatutoryRates.MIN_WAGE_NAIROBI_UNSKILLED
+
+    def _full_time_hours(self) -> Decimal:
+        """Hours a full 52-hour week comes to in the payroll month."""
         from .rates import KenyanHolidays
 
-        # Standard monthly hours based on weekly hours
-        std_monthly_hours = Decimal(self.contract.weekly_hours * 4)
-        worked_hours = sum(d.hours_normal for d in self.timesheet_days)
-        fraction = worked_hours / std_monthly_hours
-        raw_base_pay = self.contract.base_salary * fraction
+        if self.payroll_date is None:
+            return StatutoryRates.STANDARD_MONTHLY_HOURS
+        return KenyanHolidays.get_expected_hours(
+            self.payroll_date.year, self.payroll_date.month,
+            int(StatutoryRates.WEEKLY_HOURS_BEFORE_OT),
+        )
 
-        actual_base, housing_allowance, total_gross = self._compute_housing(raw_base_pay)
+    def _calc_daily(self) -> GrossBreakdown:
+        """Pay a daily-rate contract from the hours on the attendance sheet.
 
-        # Baseline: full-time monthly salary from contract
-        baseline, _, _ = self._compute_housing(self.contract.base_salary)
+        The day rate buys a standard day's hours, so pay follows the hours
+        actually worked: a half day pays half, and a long day pays more than
+        one day's rate. Only the length of the standard day changes over time
+        -- see StatutoryRates.daily_expected_hours.
+        """
+        rate = (self.contract.daily_rate
+                if self.contract.daily_rate is not None
+                else StatutoryRates.CASUAL_DAILY_RATE)
+        expected = StatutoryRates.daily_expected_hours(self.payroll_date)
 
-        # Worked-holiday premium: an extra normal day's pay per holiday worked.
-        holiday_premium = Decimal(0)
-        if self.payroll_date is not None:
-            worked_holiday_count = KenyanHolidays.count_worked_holidays(
-                self.payroll_date.year, self.payroll_date.month, self.timesheet_days
-            )
-            if worked_holiday_count > 0:
-                hourly_rate = self.contract.base_salary / std_monthly_hours
-                daily_hours = LeaveCalculator._get_daily_hours(self.contract)
-                holiday_premium = Decimal(worked_holiday_count) * daily_hours * hourly_rate
-                total_gross += holiday_premium
+        hours = sum((d.hours_normal for d in self.timesheet_days), Decimal(0))
+        earned = rate * hours / expected
+
+        # A day rate prices a short or irregular engagement; it is not meant
+        # to beat the wage of someone on full monthly terms. Where it does,
+        # and the hours behind it fall short of a full 52-hour week, the
+        # monthly salary is paid instead. Someone who genuinely worked
+        # full-time hours keeps the larger figure: past that point the day
+        # rate is measuring the work rather than outrunning it.
+        monthly_base = self._monthly_equivalent_base()
+        if (earned > monthly_base
+                and hours < self._full_time_hours()):
+            earned = monthly_base
+
+        # Overtime prices off the same day rate, so an OT hour keeps its
+        # relation to a normal one however long the standard day is.
+        hourly = rate / expected
+        overtime_1_5 = hourly * Decimal("1.5") * sum(
+            (d.hours_ot_1_5 for d in self.timesheet_days), Decimal(0))
+        overtime_2_0 = hourly * Decimal("2.0") * sum(
+            (d.hours_ot_2_0 for d in self.timesheet_days), Decimal(0))
+
+        adj_with_housing = sum((d.adj_with_housing for d in self.timesheet_days),
+                               Decimal(0))
+        adj_no_housing = sum((d.adj_no_housing for d in self.timesheet_days),
+                             Decimal(0))
+
+        # The gazetted daily rate excludes housing, so the 15% allowance goes
+        # on top rather than being netted out of it. This deliberately ignores
+        # salary_basis, which describes how a *monthly* salary is quoted and
+        # says nothing about a daily rate -- the same rule the casual portion
+        # of a monthly contract follows in _calc_fixed_monthly.
+        housed = self.contract.housing_type not in ("quarters", "dorm")
+        earns_housing = earned + overtime_1_5 + overtime_2_0 + adj_with_housing
+        housing_allowance = earns_housing * self.HOUSING_RATE if housed else Decimal(0)
+
+        actual_base = earns_housing + adj_no_housing
+        total_gross = actual_base + housing_allowance
 
         return GrossBreakdown(
             base_pay=actual_base,
-            overtime_1_5=Decimal(0),
-            overtime_2_0=Decimal(0),
+            overtime_1_5=overtime_1_5,
+            overtime_2_0=overtime_2_0,
             housing_allowance=housing_allowance,
             housing_benefit=Decimal(0),
             total_gross=total_gross,
-            baseline_base_pay=baseline,
+            # There is no full-month figure for someone paid by the day, so
+            # the summary's baseline column shows what was actually earned
+            # rather than a salary this contract does not have.
+            baseline_base_pay=actual_base,
             worked_base_pay=actual_base,
-            holiday_premium=holiday_premium,
+            adjustments=adj_with_housing + adj_no_housing,
         )
 
 
@@ -241,6 +300,15 @@ def month_split(contract: Contract, payroll_date: date | None) -> tuple[Decimal,
     first = date(payroll_date.year, payroll_date.month, 1)
     days_in_month = monthrange(payroll_date.year, payroll_date.month)[1]
     last = date(payroll_date.year, payroll_date.month, days_in_month)
+
+    # A daily-rate contract has no monthly portion at any point: every day is
+    # paid for itself. Deciding that here rather than at each call site keeps
+    # leave consistent with pay -- monthly_period_start reads this fraction,
+    # so a zero also stops the month accruing or consuming any balance. A
+    # start_date on such a row dates the engagement; it does not put the
+    # person on salaried terms they do not have.
+    if contract.contract_type == "daily":
+        return Decimal(0), last
 
     # Casual treatment is only ever right for someone with a casual_start.
     # Without one, a start_date that does not cover this month means a
@@ -426,6 +494,21 @@ class DeductionCalculator:
         self.contract = contract
 
     def calculate(self) -> Deductions:
+        # A month with no earnings has nothing to deduct from. Without this the
+        # SHIF floor alone posts a 300 charge against zero pay, and the payslip
+        # comes out at negative net -- billing someone for having been on the
+        # books. Whether that month is owed to SHIF at all is a question for
+        # the return, not for a deduction from wages that do not exist.
+        if self.gross <= 0:
+            return Deductions(
+                nssf_tier_1=Decimal(0),
+                nssf_tier_2=Decimal(0),
+                shif=Decimal(0),
+                ahl_employee=Decimal(0),
+                paye=Decimal(0),
+                total=Decimal(0),
+            )
+
         # NSSF Tier 1: 6% of earnings up to LEL
         nssf_t1 = min(self.gross, self.rates.nssf_lel) * self.rates.nssf_rate
 
@@ -512,10 +595,6 @@ class MinimumWageValidator:
         For fixed monthly: base pay should >= min wage.
         """
         from .rates import KenyanHolidays
-
-        if self.contract.contract_type == "prorated_min_wage":
-            # Prorated workers are expected to be below full minimum
-            return True, None
 
         if self.contract.contract_type == "hourly":
             # Get expected hours for full-time work this month
@@ -761,14 +840,26 @@ def default_leave_stock(employee_id: int, contract: Contract, payroll_date: date
     first day. Employment Act s.30 earns sick leave only after two months of
     continuous service, so short-service starters open at zero.
     """
+    first = date(payroll_date.year, payroll_date.month, 1)
     start = contract.start_date
+    # Someone paid by the day has no monthly engagement to earn leave
+    # against, and may have no start_date at all -- reading .year off it
+    # would only crash. They open, and stay, at zero.
+    if contract.contract_type == "daily" or start is None:
+        return LeaveStock(
+            employee_id=employee_id,
+            sick_full_pay=Decimal(0),
+            sick_half_pay=Decimal(0),
+            annual_leave=Decimal(0),
+            as_of_date=first - timedelta(days=1),
+        )
+
     months = (payroll_date.year - start.year) * 12 + (payroll_date.month - start.month)
     if payroll_date.day < start.day:
         months -= 1
     qualified = months >= LeaveCalculator.SICK_QUALIFYING_MONTHS
     sick = Decimal("7") if qualified else Decimal(0)
 
-    first = date(payroll_date.year, payroll_date.month, 1)
     return LeaveStock(
         employee_id=employee_id,
         sick_full_pay=sick,

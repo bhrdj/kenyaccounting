@@ -20,8 +20,8 @@ class Employee:
 @dataclass
 class Contract:
     employee_id: int
-    contract_type: str  # 'hourly', 'fixed_monthly', 'prorated_min_wage', 'consolidated_leave'
-    base_salary: Decimal  # Interpreted based on salary_basis
+    contract_type: str  # 'hourly', 'fixed_monthly', 'consolidated_leave', 'daily'
+    base_salary: Decimal  # Interpreted based on salary_basis. Zero on 'daily'.
     weekly_hours: int | None  # None for fixed_monthly
     housing_type: str  # 'none', 'quarters', 'dorm', 'allowance'
     housing_market_value: Decimal | None  # For 'quarters' only
@@ -37,6 +37,9 @@ class Contract:
     # Date the working trial began. Days from here until start_date (or the
     # end of the month, if the monthly contract has not begun) are casual.
     casual_start: date | None = None
+    # Rate per day worked, for contract_type 'daily'. Exclusive of the 15%
+    # housing allowance, like the gazetted casual rate it derives from.
+    daily_rate: Decimal | None = None
 
 
 @dataclass

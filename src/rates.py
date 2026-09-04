@@ -156,6 +156,25 @@ class StatutoryRates:
     STANDARD_MONTHLY_HOURS = Decimal("225")
     MIN_HOURLY_NAIROBI = MIN_WAGE_NAIROBI_UNSKILLED / STANDARD_MONTHLY_HOURS
 
+    # Daily-rate contracts pay for the hours actually worked, priced against a
+    # standard day: a short shift earns proportionally less, a long one
+    # proportionally more. Only the length of that standard day changes --
+    # 8 hours through August 2026, 9 hours from September 2026, when a longer
+    # day starts being expected of daily staff. That is a management decision
+    # rather than a statutory one, and it is dated rather than simply replaced
+    # so an August payslip stays reproducible after the rule moves under it.
+    DAILY_EXPECTED_HOURS_START = date(2026, 9, 1)
+    DAILY_EXPECTED_HOURS_BEFORE = Decimal("8")
+    DAILY_EXPECTED_HOURS_FROM = Decimal("9")
+
+    @staticmethod
+    def daily_expected_hours(payroll_date: "date | None") -> Decimal:
+        """Hours a daily rate buys in the given payroll month."""
+        if (payroll_date is None
+                or payroll_date < StatutoryRates.DAILY_EXPECTED_HOURS_START):
+            return StatutoryRates.DAILY_EXPECTED_HOURS_BEFORE
+        return StatutoryRates.DAILY_EXPECTED_HOURS_FROM
+
     # Working time, per the Regulation of Wages Order. Hours beyond either
     # threshold are overtime: 1.5x on weekdays, 2.0x on rest days and
     # gazetted holidays.

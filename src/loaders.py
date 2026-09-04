@@ -79,12 +79,31 @@ def load_employees_from_gsheet(
     return employees
 
 
+def _money(row: dict, *names: str) -> Decimal | None:
+    """First usable number among `names`, or None if none is recorded.
+
+    Column names are tried in order, so callers put the column that should
+    win first. Blank cells and the '???' placeholder count as not recorded.
+    """
+    for name in names:
+        raw = (row.get(name) or "").strip()
+        if raw and raw != "???":
+            return Decimal(raw)
+    return None
+
+
 def load_contracts(path: str | Path, active_only: bool = True) -> list[Contract]:
     """Load contracts from a TSV file.
 
-    Handles both test fixtures and real data. When current_base_salary is
-    present and non-empty, it is used as the effective base_salary (the
-    contractual base_salary column is historical).
+    Handles both test fixtures and real data. The current_* column holds the
+    salary actually being paid; the contractual base_* column is historical,
+    and is used only when no current figure is recorded.
+
+    Pay columns are read under both the current names (base_daily,
+    base_monthly and their current_* twins) and the older single-salary names
+    (base_salary, current_base_salary). Keeping the old names readable is what
+    lets `--replay` recompute a month from an archive written before the
+    columns were split, and keeps the test fixtures valid.
 
     Skips rows where contract_type is '???' or status is not 'active'
     (when active_only=True). Skips duplicate rows (status='duplicate').
@@ -109,13 +128,24 @@ def load_contracts(path: str | Path, active_only: bool = True) -> list[Contract]
             if active_only and status != "active":
                 continue
 
+            # Monthly salary and daily rate, each preferring the current
+            # figure over the contractual one. _money returns None when every
+            # candidate column is absent, blank or '???'.
+            monthly_salary = _money(row, "current_base_monthly", "base_monthly",
+                                    "current_base_salary", "base_salary")
+            daily_rate = _money(row, "current_base_daily", "base_daily")
+            casual_start_raw = row.get("casual_start", "").strip()
+
             # Skip rows with unknown contract type
             contract_type = row.get("contract_type", "").strip()
             if not contract_type or contract_type == "???":
-                # If we have a current_base_salary, treat as hourly (best guess for
-                # employees with no contract on file but known pay)
-                current_base = row.get("current_base_salary", "").strip()
-                if current_base and current_base != "???":
+                # Infer from whichever pay figure is on file: a known daily
+                # rate means a daily contract, a known salary means hourly
+                # (the best guess for someone with no contract on file but
+                # known pay).
+                if daily_rate is not None:
+                    contract_type = "daily"
+                elif monthly_salary is not None:
                     contract_type = "hourly"
                 else:
                     continue
@@ -125,15 +155,14 @@ def load_contracts(path: str | Path, active_only: bool = True) -> list[Contract]
                 continue
             seen_ids.add(emp_id)
 
-            # Determine effective salary: use current_base_salary if available
-            base_salary_raw = row.get("base_salary", "").strip()
-            current_base_raw = row.get("current_base_salary", "").strip()
-            casual_start_raw = row.get("casual_start", "").strip()
-
-            if current_base_raw and current_base_raw != "???":
-                effective_salary = Decimal(current_base_raw)
-            elif base_salary_raw and base_salary_raw != "???":
-                effective_salary = Decimal(base_salary_raw)
+            if contract_type == "daily":
+                # Paid per day worked, so there is no monthly salary to carry.
+                # Without a rate there is nothing to pay from at all.
+                if daily_rate is None:
+                    continue
+                effective_salary = Decimal(0)
+            elif monthly_salary is not None:
+                effective_salary = monthly_salary
             elif casual_start_raw and casual_start_raw != "???":
                 # A casual on working trial has no monthly salary yet: they
                 # are paid the statutory daily rate per day worked. Keeping
@@ -193,6 +222,7 @@ def load_contracts(path: str | Path, active_only: bool = True) -> list[Contract]
                     salary_basis=salary_basis,
                     hourly_divisor=hourly_divisor,
                     casual_start=casual_start,
+                    daily_rate=daily_rate,
                 )
             )
     return contracts
