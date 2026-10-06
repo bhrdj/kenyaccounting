@@ -17,6 +17,7 @@ import time
 from urllib.parse import urlparse
 
 import requests
+from google.auth.exceptions import TransportError
 from google.auth.transport.requests import AuthorizedSession
 from gspread.http_client import HTTPClient
 from gspread.urls import DRIVE_FILES_API_V3_URL
@@ -32,6 +33,9 @@ _NETWORK_ERRORS = (
     requests.exceptions.ConnectionError,  # includes a read timeout mid-body
     requests.exceptions.Timeout,
     requests.exceptions.ChunkedEncodingError,
+    # google-auth rewraps network failures during the hourly token refresh
+    # as its own TransportError. A refresh is safe to repeat.
+    TransportError,
 )
 
 

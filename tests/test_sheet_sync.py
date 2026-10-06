@@ -136,3 +136,8 @@ def test_gives_up_after_attempts(monkeypatch):
 def test_attendance_cell(value, row, col, expected):
     assert _attendance_cell(value, row, col) == expected
 
+
+
+def test_token_refresh_network_failure_is_retried():
+    from google.auth.exceptions import TransportError
+    assert netretry.is_transient(TransportError("oauth2.googleapis.com: Read timed out."))
