@@ -580,11 +580,16 @@ class MinimumWageValidator:
         contract: Contract,
         hours_worked: Decimal,
         payroll_date: date,
+        standard_hours: Decimal | None = None,
     ):
         self.base_pay = base_pay
         self.contract = contract
         self.hours_worked = hours_worked
         self.payroll_date = payroll_date
+        # Hours the pay is meant to cover: the standard month, prorated for a
+        # part month on monthly terms, plus any days worked as a casual.
+        self.standard_hours = (StatutoryRates.STANDARD_MONTHLY_HOURS
+                               if standard_hours is None else standard_hours)
 
     def validate(self) -> tuple[bool, str | None]:
         """
@@ -629,15 +634,22 @@ class MinimumWageValidator:
             # floor. Dividing by hours handles mid-month starters, part-timers
             # and casual-to-monthly transitions without any proration: the
             # effective rate is the thing the law cares about either way.
+            #
+            # Hours are capped at the standard month (prorated for a part
+            # month): the monthly salary covers every hour within the weekly
+            # limit, so a long month (226h with no week over 52) is not
+            # underpaid. Hours past the weekly limit are overtime, which
+            # weekly_hours_warnings reports.
             if self.hours_worked <= 0:
                 return True, None
-            effective = self.base_pay / self.hours_worked
+            hours = min(self.hours_worked, self.standard_hours)
+            effective = self.base_pay / hours
             floor = StatutoryRates.MIN_HOURLY_NAIROBI
             if effective < floor:
-                shortfall = (floor - effective) * self.hours_worked
+                shortfall = (floor - effective) * hours
                 return False, (
                     f"Effective rate KES {effective:,.2f}/hr "
-                    f"(KES {self.base_pay:,.2f} for {self.hours_worked:g}h) is below "
+                    f"(KES {self.base_pay:,.2f} for {hours:g}h) is below "
                     f"the minimum KES {floor:,.2f}/hr. Short by "
                     f"KES {shortfall:,.2f} this month."
                 )
@@ -955,8 +967,12 @@ class PayrollEngine:
         # 9. Validate minimum wage
         warnings = []
         hours_worked = sum(d.hours_normal for d in timesheet_days)
+        monthly_fraction, casual_until = month_split(contract, self.payroll_date)
+        casual_hours = sum(d.hours_normal for d in timesheet_days
+                           if casual_until is not None and d.date <= casual_until)
         min_wage_validator = MinimumWageValidator(
-            gross.base_pay, contract, hours_worked, self.payroll_date
+            gross.base_pay, contract, hours_worked, self.payroll_date,
+            standard_hours=StatutoryRates.STANDARD_MONTHLY_HOURS * monthly_fraction + casual_hours,
         )
         is_valid, warning = min_wage_validator.validate()
         if not is_valid and warning:

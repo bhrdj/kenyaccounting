@@ -351,6 +351,25 @@ class TestEffectiveHourlyMinimum:
         ok, _ = self._validate(0, 0)
         assert ok
 
+    def test_long_month_on_the_monthly_minimum_is_not_flagged(self):
+        """226h with no week over 52 is covered by the salary; excess hours
+        are overtime, judged weekly, not an underpaid month."""
+        ok, _ = self._validate(18047.40, 226)
+        assert ok
+
+    def test_part_month_cap_is_prorated(self):
+        """A starter on the 7th of a 30-day month is paid 24/30 of the
+        minimum; 183h against a prorated 180h standard is not underpaid."""
+        v = MinimumWageValidator(Decimal("14437.92"), contract(date(2026, 9, 7)),
+                                 Decimal("183"), date(2026, 9, 28),
+                                 standard_hours=Decimal("225") * 24 / 30)
+        ok, _ = v.validate()
+        assert ok
+
+    def test_long_month_below_the_monthly_minimum_is_still_flagged(self):
+        ok, msg = self._validate(16000, 240)
+        assert not ok and "for 225h" in msg
+
 
 class TestContractCoverage:
     def test_renewal_dated_after_the_month_is_flagged(self):
@@ -363,6 +382,16 @@ class TestContractCoverage:
         c.end_date = date(2026, 6, 30)
         w = contract_coverage_warnings(c, date(2026, 7, 28))
         assert len(w) == 1 and "before this payroll month" in w[0]
+
+    def test_current_end_date_is_open_ended(self, tmp_path):
+        """'current' marks a contract in force whose renewal isn't entered."""
+        from src.loaders import load_contracts
+        p = tmp_path / "contracts.tsv"
+        p.write_text("employee_id\tcontract_type\tbase_monthly\tstart_date\tend_date\tstatus\n"
+                     "1\tfixed_monthly\t18047.4\t2025-01-01\tcurrent\tactive\n")
+        [c] = load_contracts(p)
+        assert c.end_date is None
+        assert contract_coverage_warnings(c, date(2026, 9, 28)) == []
 
     def test_a_covering_contract_is_silent(self):
         assert contract_coverage_warnings(contract(date(2026, 1, 1)), date(2026, 7, 28)) == []

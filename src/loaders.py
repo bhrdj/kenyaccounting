@@ -186,7 +186,11 @@ def load_contracts(path: str | Path, active_only: bool = True) -> list[Contract]
             start_raw = row.get("start_date", "").strip()
             end_raw = row.get("end_date", "").strip()
             start_date = _parse_date(start_raw) if start_raw and start_raw != "???" else None
-            end_date = _parse_date(end_raw) if end_raw and end_raw != "???" else None
+            # "current" marks a contract known to be in force whose renewal
+            # paperwork has not been entered yet; it is open-ended, so the
+            # contract-ended warning stays quiet.
+            end_date = (_parse_date(end_raw)
+                        if end_raw and end_raw not in ("???", "current") else None)
             casual_start = (_parse_date(casual_start_raw)
                             if casual_start_raw and casual_start_raw != "???" else None)
 

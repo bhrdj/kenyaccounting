@@ -146,9 +146,11 @@ class StatutoryRates:
     # Both are exclusive of the 15% housing allowance, which is added on top
     # wherever they are used to compute pay.
 
-    # The monthly minimum buys 225 hours, so it prorates: someone who works
-    # fewer hours is owed proportionally less, and someone who works more is
-    # owed proportionally more. That makes the hourly floor a derived figure
+    # The monthly minimum buys 225 hours, so it prorates downward: someone
+    # who works fewer hours is owed proportionally less. It does not prorate
+    # upward -- a monthly salary covers every hour within the 52h weekly
+    # limit however long the month runs, and hours past that limit are
+    # overtime, judged week by week. That makes the hourly floor a derived figure
     # rather than an independent one, which matters because the Order's own
     # published numbers do not reconcile -- 16,113.75/month, 775.39/day and
     # 77.54/hour imply 20.78 days per month and 10 hours per day. Deriving
