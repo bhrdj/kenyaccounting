@@ -430,7 +430,12 @@ def upload_leave_stocks_to_gsheet(
         ws = sh.worksheet(tab_name)
         ws.clear()
     except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title=tab_name, rows=len(rows), cols=len(header))
+        try:
+            ws = sh.add_worksheet(title=tab_name, rows=len(rows), cols=len(header))
+        except gspread.exceptions.APIError:
+            # A retried addSheet whose first attempt landed is rejected as a
+            # duplicate name; the tab is there, so use it.
+            ws = sh.worksheet(tab_name)
 
     ws.update(rows, value_input_option="RAW")
 
@@ -554,12 +559,12 @@ def _drive_session():
     is needed. google-auth ships with gspread, so no new dependency.
     """
     from google.oauth2.credentials import Credentials
-    from google.auth.transport.requests import AuthorizedSession
 
     from .gauth import GSPREAD_TOKEN
+    from .netretry import RetryingSession
 
     creds = Credentials.from_authorized_user_file(str(GSPREAD_TOKEN))
-    return AuthorizedSession(creds)
+    return RetryingSession(creds)
 
 
 def _drive_find_child(session, parent_id: str, name: str, folder: bool = False):
@@ -579,16 +584,24 @@ def _drive_find_child(session, parent_id: str, name: str, folder: bool = False):
 
 
 def _drive_get_or_create_folder(session, parent_id: str, name: str) -> str:
-    fid = _drive_find_child(session, parent_id, name, folder=True)
-    if fid:
-        return fid
-    meta = {"name": name, "mimeType": "application/vnd.google-apps.folder",
-            "parents": [parent_id]}
-    r = session.post(f"{_DRIVE_API}/files",
-                     params={"supportsAllDrives": "true", "fields": "id"},
-                     json=meta)
-    r.raise_for_status()
-    return r.json()["id"]
+    from .netretry import with_retries
+
+    # The session sends POSTs once. Retrying here is safe because each
+    # attempt looks first: a create whose response was lost is found, not
+    # repeated.
+    def attempt():
+        fid = _drive_find_child(session, parent_id, name, folder=True)
+        if fid:
+            return fid
+        meta = {"name": name, "mimeType": "application/vnd.google-apps.folder",
+                "parents": [parent_id]}
+        r = session.post(f"{_DRIVE_API}/files",
+                         params={"supportsAllDrives": "true", "fields": "id"},
+                         json=meta)
+        r.raise_for_status()
+        return r.json()["id"]
+
+    return with_retries(attempt, f"create folder {name}")
 
 
 def _drive_list_children(session, parent_id: str) -> dict[str, str]:
@@ -624,14 +637,20 @@ def _drive_upload_file(session, parent_id: str, path: Path,
     import json
     import mimetypes
 
+    from .netretry import with_retries
+
     mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     data = path.read_bytes()
-    if existing_id:
+
+    def overwrite(file_id):
         r = session.patch(
-            f"{_DRIVE_UPLOAD}/{existing_id}",
+            f"{_DRIVE_UPLOAD}/{file_id}",
             params={"uploadType": "media", "supportsAllDrives": "true"},
             headers={"Content-Type": mime}, data=data)
         r.raise_for_status()
+
+    if existing_id:
+        overwrite(existing_id)
         return
 
     boundary = "kenyacc_boundary_7f3a2b"
@@ -640,12 +659,28 @@ def _drive_upload_file(session, parent_id: str, path: Path,
         f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
         f"{meta}\r\n--{boundary}\r\nContent-Type: {mime}\r\n\r\n"
     ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
-    r = session.post(
-        _DRIVE_UPLOAD,
-        params={"uploadType": "multipart", "supportsAllDrives": "true", "fields": "id"},
-        headers={"Content-Type": f"multipart/related; boundary={boundary}"},
-        data=body)
-    r.raise_for_status()
+
+    # The create is a POST, which the session sends once. A create whose
+    # response was lost may still have landed, so each retry looks for the
+    # file first and overwrites it rather than uploading a duplicate.
+    first = True
+
+    def attempt():
+        nonlocal first
+        if not first:
+            found = _drive_find_child(session, parent_id, path.name)
+            if found:
+                overwrite(found)
+                return
+        first = False
+        r = session.post(
+            _DRIVE_UPLOAD,
+            params={"uploadType": "multipart", "supportsAllDrives": "true", "fields": "id"},
+            headers={"Content-Type": f"multipart/related; boundary={boundary}"},
+            data=body)
+        r.raise_for_status()
+
+    with_retries(attempt, f"upload {path.name}")
 
 
 def _drive_trash(session, file_id: str) -> None:

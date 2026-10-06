@@ -44,6 +44,8 @@ def client():
     """Authorized gspread client, prompting for browser consent if needed."""
     import gspread
 
+    from .netretry import RetryingHTTPClient
+
     if not GSPREAD_CREDS.is_file():
         raise FileNotFoundError(_SETUP_HELP)
 
@@ -51,4 +53,5 @@ def client():
     return gspread.oauth(
         credentials_filename=str(GSPREAD_CREDS),
         authorized_user_filename=str(GSPREAD_TOKEN),
+        http_client=RetryingHTTPClient,
     )

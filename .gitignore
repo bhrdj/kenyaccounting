@@ -210,3 +210,5 @@ __marimo__/
 TODOS.md
 data/
 data_gitignored/
+# Sheets read cache: employee data (src/sheetcache.py)
+/.cache/

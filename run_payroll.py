@@ -21,7 +21,9 @@ Usage:
 import argparse
 import sys
 import tempfile
-from contextlib import nullcontext
+import threading
+import time
+from contextlib import contextmanager, nullcontext
 from datetime import date
 from pathlib import Path
 
@@ -43,6 +45,33 @@ from src.snapshot import (
 
 COMPANY_NAME = "B'aida Daycare & Learning Centre"
 
+HEARTBEAT_SECONDS = 10
+
+
+@contextmanager
+def heartbeat(what: str, every: float = HEARTBEAT_SECONDS):
+    """Print a still-alive line every `every` seconds until the block exits.
+
+    The Google calls can sit silent for minutes (a slow export, a stalled
+    connection, a consent prompt waiting in a browser), and a silent run is
+    indistinguishable from a hung one. The tick names the step, so a stall
+    is attributable without attaching a debugger.
+    """
+    done = threading.Event()
+    start = time.monotonic()
+
+    def tick():
+        while not done.wait(every):
+            print(f"  ... still {what} ({time.monotonic() - start:.0f}s)", flush=True)
+
+    t = threading.Thread(target=tick, daemon=True)
+    t.start()
+    try:
+        yield
+    finally:
+        done.set()
+        t.join()
+
 
 def run(year: int, month: int, workdir: Path, sync: bool, save: bool,
         replay: bool = False, replay_file: Path | None = None) -> int:
@@ -59,8 +88,9 @@ def run(year: int, month: int, workdir: Path, sync: bool, save: bool,
             if replay_file:
                 payload = read_snapshot(replay_file)
             else:
-                payload = read_snapshot(
-                    download_archived_file(year, month, SNAPSHOT_NAME))
+                with heartbeat("downloading archived snapshot"):
+                    payload = read_snapshot(
+                        download_archived_file(year, month, SNAPSHOT_NAME))
         except (FileNotFoundError, ValueError) as e:
             print(f"Cannot replay: {e}", file=sys.stderr)
             return 1
@@ -73,7 +103,8 @@ def run(year: int, month: int, workdir: Path, sync: bool, save: bool,
         print()
     elif sync:
         print(f"Syncing inputs for {year} from Google Sheets...")
-        missing = sync_inputs(inputs, year)
+        with heartbeat("syncing inputs from Google Sheets"):
+            missing = sync_inputs(inputs, year)
         if missing:
             print("\nCannot run - no spreadsheet key configured for:", file=sys.stderr)
             for m in missing:
@@ -113,7 +144,8 @@ def run(year: int, month: int, workdir: Path, sync: bool, save: bool,
         print(f"Attendance workbook not found: {xlsx}", file=sys.stderr)
         return 1
     ts_dir = inputs / "timesheets" / f"{year}_{month:02d}"
-    extract_month(xlsx, ts_dir, year, month, log=lambda _: None)
+    with heartbeat("extracting timesheets"):
+        extract_month(xlsx, ts_dir, year, month, log=lambda _: None)
     timesheets = load_timesheet_folder(ts_dir, year, month)
 
     if not timesheets:
@@ -196,14 +228,16 @@ def run(year: int, month: int, workdir: Path, sync: bool, save: bool,
     if payslips and save:
         written = save_payroll_outputs(payslips, year, month, outputs, COMPANY_NAME)
         print(f"\nGenerated {len(written)} output files")
-        drive_url, n_uploaded, trashed = upload_payroll_outputs_to_gdrive(
-            year, month, outputs, replace=True)
+        with heartbeat("uploading outputs to Google Drive"):
+            drive_url, n_uploaded, trashed = upload_payroll_outputs_to_gdrive(
+                year, month, outputs, replace=True)
         print(f"Uploaded {n_uploaded} output files to Google Drive: {drive_url}")
         if trashed:
             print(f"Trashed {len(trashed)} stale file(s) this run did not produce:")
             for t in trashed:
                 print(f"  - {t}")
-        tab = upload_leave_stocks_to_gsheet(payslips, year, month)
+        with heartbeat("uploading leave stocks"):
+            tab = upload_leave_stocks_to_gsheet(payslips, year, month)
         print(f"Uploaded leave stocks to gsheet tab: {tab}")
 
     if skipped:
@@ -216,6 +250,10 @@ def run(year: int, month: int, workdir: Path, sync: bool, save: bool,
 
 
 def main():
+    # Piped or redirected stdout is block-buffered by default, which holds
+    # every progress line (heartbeats included) until exit.
+    sys.stdout.reconfigure(line_buffering=True)
+
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--year", type=int, default=2026)
     parser.add_argument("--month", type=int, default=1)

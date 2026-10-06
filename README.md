@@ -57,14 +57,23 @@ python run_payroll.py --year 2026 --month 1 --no-save  # preview only, publishes
 
 That single command does everything:
 
-1. Downloads inputs from Google Sheets into a temp directory
+1. Downloads inputs from Google Sheets into a temp directory, one tab per request (see *Network robustness* below)
 2. Snapshots those exact inputs to `inputs_snapshot.zip`
 3. Splits the attendance workbook into per-employee timesheets for the month
 4. Computes payslips
 5. Uploads outputs (including the snapshot) to the Drive archive folder, and the updated leave balances to the `leave_stocks_YYYY` sheet
 6. Deletes the temp directory
 
-**No private employee data touches the working tree**, and no local input files need to be maintained.
+No local input files need to be maintained. The only employee data kept on disk between runs is the read cache in `.cache/sheets/` (gitignored, owner-only permissions); delete it to force a full re-download.
+
+### Network robustness
+
+The office VPN intermittently stalls Google responses part-way through, so every Google call is built to survive that:
+
+- **Timeouts.** Each request gives up after 30s of silence (`src/netretry.py`). gspread's default is no timeout at all, which turned a stall into a hang.
+- **Retries.** Transient failures (timeouts, dropped connections, 429/5xx) are retried up to 4 times with backoff, and each retry is printed. Requests that create something are never blindly repeated: a retry first checks whether the lost attempt actually landed.
+- **Small requests, cached.** Each sheet tab is its own request, cached in `.cache/sheets/` as soon as it arrives (`src/sheetcache.py`). A spreadsheet's cache is used only while its Drive modified time is unchanged; any edit, including payroll's own leave-stocks write, re-fetches it. A run that dies part-way resumes from the tabs it already has, and an unchanged rerun syncs in seconds.
+- **Heartbeat.** Slow steps print `... still <step> (Ns)` every 10s, so a slow run can be told apart from a hung one.
 
 ### Reproducing a past run
 
