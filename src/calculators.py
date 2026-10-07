@@ -18,6 +18,41 @@ class GrossCalculator:
         self.timesheet_days = timesheet_days
         self.payroll_date = payroll_date
 
+    # A consolidated_leave salary buys three working weeks a month; the
+    # fourth is the leave it consolidates.
+    CONSOLIDATED_WORK_WEEKS = 3
+
+    @classmethod
+    def statutory_divisor_for(cls, contract: Contract) -> Decimal:
+        """Monthly hours a salary pays for: the statutory 225.33 (a 52-hour
+        week) scaled to the contract's own weekly hours, so someone on 45
+        hours a week is charged salary/195 per missed hour, not salary/225.33.
+
+        consolidated_leave is a different bargain: its target is three of the
+        contract's weeks a month (52h x 3 = 156h).
+        """
+        weekly = Decimal(contract.weekly_hours or 52)
+        if contract.contract_type == "consolidated_leave":
+            return weekly * cls.CONSOLIDATED_WORK_WEEKS
+        return cls.STATUTORY_DIVISOR * weekly / Decimal(52)
+
+    def _consolidated_part_month_fraction(self, casual_until: date | None) -> Decimal:
+        """Share of a consolidated_leave salary earned in a part month.
+
+        Calendar days would pay for a share of the off week, so a month the
+        contract starts or ends in is paid by hours worked against the
+        monthly target, capped at a full month. A whole month is paid in
+        full, its off week being the leave.
+        """
+        end = monthly_period_end(self.contract, self.payroll_date)
+        worked = sum(
+            (d.hours_normal for d in self.timesheet_days
+             if (casual_until is None or d.date > casual_until)
+             and (end is None or d.date <= end)),
+            Decimal(0),
+        )
+        return min(worked / self.statutory_divisor_for(self.contract), Decimal(1))
+
     def _get_divisor(self) -> Decimal:
         """
         Get the hourly divisor based on contract settings.
@@ -136,6 +171,9 @@ class GrossCalculator:
         from .rates import StatutoryRates
 
         monthly_fraction, casual_until = month_split(self.contract, self.payroll_date)
+        if (self.contract.contract_type == "consolidated_leave"
+                and 0 < monthly_fraction < 1):
+            monthly_fraction = self._consolidated_part_month_fraction(casual_until)
 
         # Casual days are paid only for hours actually worked -- unlike the
         # monthly portion, where absence is the thing that gets deducted. So an
@@ -317,21 +355,44 @@ def month_split(contract: Contract, payroll_date: date | None) -> tuple[Decimal,
     # their salary would be badly wrong, so they stay on monthly terms and
     # contract_coverage_warnings reports the gap.
     if contract.start_date is None or contract.start_date > last:
-        if contract.casual_start is None:
-            return Decimal(1), None
-        return Decimal(0), last
+        if contract.casual_start is not None:
+            return Decimal(0), last
+        start = first
+    else:
+        start = max(contract.start_date, first)
 
-    start = contract.start_date
-    if start <= first:
-        return Decimal(1), None
-    monthly_days = (last - start).days + 1
-    return Decimal(monthly_days) / Decimal(days_in_month), start - timedelta(days=1)
+    # A contract ending inside the month (a resignation, a death, a term
+    # that was not renewed) is paid to its end date on the same calendar-day
+    # basis as a mid-month start.
+    end = monthly_period_end(contract, payroll_date) or last
+    monthly_days = max((end - start).days + 1, 0)
+    casual_until = None if start == first else start - timedelta(days=1)
+    return Decimal(monthly_days) / Decimal(days_in_month), casual_until
+
+
+def monthly_period_end(contract: Contract, payroll_date: date | None) -> date | None:
+    """The contract's end date when it falls before the last day of the
+    payroll month, else None.
+
+    An end date before the month began is not treated as an ending: by the
+    sheet's convention that is a renewal not yet entered, and
+    contract_coverage_warnings reports it instead.
+    """
+    if payroll_date is None or contract.end_date is None:
+        return None
+    first = date(payroll_date.year, payroll_date.month, 1)
+    last = date(payroll_date.year, payroll_date.month,
+                monthrange(payroll_date.year, payroll_date.month)[1])
+    if first <= contract.end_date < last:
+        return contract.end_date
+    return None
 
 
 class LeaveCalculator:
     def __init__(self, timesheet_days: list[TimesheetDay], leave_stock: LeaveStock,
                  contract: Contract, monthly_fraction: Decimal = Decimal(1),
-                 monthly_from: date | None = None, all_monthly: bool = True):
+                 monthly_from: date | None = None, all_monthly: bool = True,
+                 monthly_until: date | None = None):
         self.leave_stock = leave_stock
         self.contract = contract
         # Leave is a feature of monthly employment, and applies only from the
@@ -346,6 +407,10 @@ class LeaveCalculator:
             self.timesheet_days = []
         else:
             self.timesheet_days = [d for d in timesheet_days if d.date >= monthly_from]
+        # Nor can the days after a contract has ended: they are not absences.
+        if monthly_until is not None:
+            self.timesheet_days = [d for d in self.timesheet_days
+                                   if d.date <= monthly_until]
         # Accrual likewise scales with the part of the month actually spent on
         # the monthly contract; casual days earn none.
         self.monthly_fraction = monthly_fraction
@@ -712,77 +777,11 @@ def contract_coverage_warnings(
     monthly terms -- an established employee is not a casual -- but the gap
     is worth knowing about when the payslip is questioned later.
     """
-    if payroll_date is None or contract.casual_start is not None:
-        return []
-    first = date(payroll_date.year, payroll_date.month, 1)
-    last = date(payroll_date.year, payroll_date.month,
-                monthrange(payroll_date.year, payroll_date.month)[1])
-
-    if contract.start_date is not None and contract.start_date > last:
-        return [f"Contract on file starts {contract.start_date}, after this payroll "
-                f"month. Paid on monthly terms from the same salary; the term "
-                f"covering this month is not in the sheet."]
-    if contract.end_date is not None and contract.end_date < first:
-        return [f"Contract on file ended {contract.end_date}, before this payroll "
-                f"month. Paid on monthly terms from the same salary; check whether "
-                f"a renewal is missing."]
-    return []
-
-
-def monthly_period_start(contract: Contract, payroll_date: date | None) -> date | None:
-    """First date in the payroll month on monthly terms, or None if none are.
-
-    Leave keys off this: it is a feature of monthly employment and applies
-    from this date onward. Days before it fall into one of two categories --
-    a working trial paid per day, or a period before the person was engaged
-    at all -- and neither can consume a leave balance.
-    """
-    fraction, casual_until = month_split(contract, payroll_date)
-    if fraction == 0:
-        return None
-    if casual_until is None:
-        return date(payroll_date.year, payroll_date.month, 1)
-    return casual_until + timedelta(days=1)
-
-
-def casual_days_worked(contract: Contract, timesheet_days: list[TimesheetDay],
-                       casual_until: date | None) -> int:
-    """Count working-trial days worked, for payment at the daily wage.
-
-    Any day with hours recorded counts as one day: a daily wage is
-    consideration for turning up, not for a count of hours. Real trial days
-    run 8-9 hours, so part-days are not the normal case -- but a short shift
-    does earn a full day's rate under this rule.
-    """
-    if casual_until is None:
-        return 0
-    return sum(
-        1 for d in timesheet_days
-        if in_casual_window(contract, d.date, casual_until) and d.hours_normal > 0
-    )
-
-
-def in_casual_window(contract: Contract, day: date, casual_until: date) -> bool:
-    """Is `day` inside the working-trial period this contract was paid for?
-
-    The window runs from casual_start (where recorded) to the day before the
-    monthly contract begins.
-    """
-    if day > casual_until:
-        return False
-    return contract.casual_start is None or day >= contract.casual_start
-
-
-def contract_coverage_warnings(
-    contract: Contract, payroll_date: date | None,
-) -> list[str]:
-    """Flag a payroll month the contract on file does not actually cover.
-
-    Only one contract row per employee survives loading, so a renewal
-    replaces the term that covered earlier months. The month is still paid on
-    monthly terms -- an established employee is not a casual -- but the gap
-    is worth knowing about when the payslip is questioned later.
-    """
+    end = monthly_period_end(contract, payroll_date)
+    if end is not None:
+        return [f"Contract ends {end}, inside this payroll month; monthly pay "
+                f"is prorated to that date. If it was renewed, enter the "
+                f"renewal in the contracts sheet."]
     if payroll_date is None or contract.casual_start is not None:
         return []
     first = date(payroll_date.year, payroll_date.month, 1)
@@ -897,7 +896,8 @@ class PayrollEngine:
         monthly_fraction, _ = month_split(contract, self.payroll_date)
         leave_calc = LeaveCalculator(
             timesheet_days, leave_stock, contract, monthly_fraction,
-            monthly_period_start(contract, self.payroll_date), all_monthly=False)
+            monthly_period_start(contract, self.payroll_date), all_monthly=False,
+            monthly_until=monthly_period_end(contract, self.payroll_date))
         leave = leave_calc.allocate()
 
         # 2. Calculate gross
@@ -1044,7 +1044,7 @@ class PayrollEngine:
         apply the statutory hourly rate."""
         from .rates import KenyanHolidays
 
-        hourly_rate = gross.base_pay / GrossCalculator.STATUTORY_DIVISOR
+        hourly_rate = gross.base_pay / GrossCalculator.statutory_divisor_for(contract)
 
         # Gather hours
         ot_1_5_hours = sum(d.hours_ot_1_5 for d in timesheet_days)
